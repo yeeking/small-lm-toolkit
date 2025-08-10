@@ -43,9 +43,9 @@ def find_converter(converter_arg: str | None) -> Path:
         candidates.append(Path(env))
     # common relative guesses
     candidates += [
-        Path("./llama.cpp/convert_hf_to_gguf.py"),
-        Path("../llama.cpp/convert_hf_to_gguf.py"),
-        Path("~/llama.cpp/convert_hf_to_gguf.py").expanduser(),
+        Path("./libs/llama.cpp/convert_hf_to_gguf.py"),
+        # Path("../llama.cpp/convert_hf_to_gguf.py"),
+        # Path("~/llama.cpp/convert_hf_to_gguf.py").expanduser(),
     ]
     for p in candidates:
         if p.exists():
@@ -98,15 +98,16 @@ def convert_model(hf_repo, model_size_str):
         if snapshot_download is None:
             raise RuntimeError("huggingface_hub not installed. Run: pip install huggingface_hub")
         print(f"[INFO] Downloading HF repo: {model_arg}")
-        model_dir = Path(
-            snapshot_download(
-                repo_id=model_arg,
-                revision=args.revision,
-                allow_patterns=None,  # grab all
-                token=args.hf_token,
-                tqdm_class=None,
-            )
-        )
+        model_dir = shared_utils.download_model(model_arg)
+        # model_dir = Path(
+        #     snapshot_download(
+        #         repo_id=model_arg,
+        #         revision=args.revision,
+        #         allow_patterns=None,  # grab all
+        #         token=args.hf_token,
+        #         tqdm_class=None,
+        #     )
+        # )
         print(f"[INFO] Downloaded to: {model_dir}")
 
     # Find the converter

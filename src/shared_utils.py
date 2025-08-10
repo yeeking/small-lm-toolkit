@@ -1,7 +1,19 @@
 from pathlib import Path
 import os 
 from llama_cpp import Llama
+from huggingface_hub import snapshot_download, hf_hub_download
 
+
+def download_model(hf_repo):
+    """download the sent hf model (if not already downloaded) and return its location on the local filesystem"""
+    model_dir = Path(
+        snapshot_download(
+            repo_id=hf_repo,
+            allow_patterns=None,  # grab all
+            tqdm_class=None,
+        )
+    )
+    return model_dir 
 
 def get_model_gguf(hf_repo, model_size_str, outtype="f16", outdir="./gguf_out"):
 
