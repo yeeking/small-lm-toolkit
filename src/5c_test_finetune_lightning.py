@@ -232,13 +232,13 @@ class HFCLMModule(pl.LightningModule):
         if self.tokenizer.pad_token is None and self.tokenizer.eos_token is not None:
             self.tokenizer.pad_token = self.tokenizer.eos_token
 
-        # Model
-        dtype = torch.bfloat16 if (torch.cuda.is_available() and bf16_if_cuda) else torch.float32
+        # Model - let Lightning handle the device management
         self.model = AutoModelForCausalLM.from_pretrained(
             repo,
-            torch_dtype=dtype,
+            torch_dtype=torch.float32,  # MPS doesn't support bf16
             trust_remote_code=trust_remote_code,
         )
+
         if enable_grad_ckpt and hasattr(self.model, "gradient_checkpointing_enable"):
             try:
                 self.model.gradient_checkpointing_enable()
@@ -286,12 +286,13 @@ def safe_run_name(repo: str) -> str:
 
 def run_one_model(
     repo: str,
+    parm_count, 
     trust_remote_code: bool,
     train_files: List[Path],
     val_files: List[Path],
     args,
 ):
-    run_name = safe_run_name(repo)
+    run_name = safe_run_name(f"{repo}_{parm_count}")
     logger = TensorBoardLogger(save_dir=args.log_dir, name=run_name)
     ckpt_cb = ModelCheckpoint(
         dirpath=Path(args.out_dir) / run_name,
@@ -313,6 +314,7 @@ def run_one_model(
         bf16_if_cuda=not args.no_bf16,
         enable_grad_ckpt=not args.no_grad_ckpt,
     )
+    
     pin_memory = torch.cuda.is_available()
     dm = FiniteDataModule(
         train_files=train_files,
@@ -327,9 +329,9 @@ def run_one_model(
 
     # Build trainer with finite epochs → bounded progress bars
     trainer = pl.Trainer(
-        accelerator="auto",
+        accelerator="mps" if torch.backends.mps.is_available() else "cpu",
         devices="auto",
-        precision="bf16-mixed" if (torch.cuda.is_available() and not args.no_bf16) else "32-true",
+        precision="32-true",  # MPS doesn't support bf16
         max_epochs=args.max_epochs,
         accumulate_grad_batches=args.grad_accum,
         log_every_n_steps=10,
@@ -389,9 +391,10 @@ def main():
     for entry in plan["models"]:
         assert "hf_repo" in entry, f"Model entry missing 'hf_repo': {entry}"
         repo = entry["hf_repo"]
+        size_b = entry["size_b"]
         trust_remote_code = bool(entry.get("trust_remote_code", False))
         print(f"\n=== Lightning run: {repo} ===")
-        run_one_model(repo, trust_remote_code, train_files, val_files, args)
+        run_one_model(repo, size_b, trust_remote_code, train_files, val_files, args)
 
 
 if __name__ == "__main__":
