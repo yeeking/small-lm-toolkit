@@ -74,6 +74,19 @@ def find_text_files(root: Path) -> List[Path]:
     return sorted(files)
 
 
+def sort_models_by_size(models_json):
+    """
+    Sort a list of model config dicts by their 'size_b' field ascending.
+    Raises ValueError if the input is not valid.
+    """
+    if not isinstance(models_json, list):
+        raise ValueError("Expected a list of model configs")
+    for item in models_json:
+        if "size_b" not in item:
+            raise ValueError(f"Missing 'size_b' in entry: {item}")
+    return sorted(models_json, key=lambda m: m["size_b"])
+
+
 def safe_read_lines(path: Path) -> List[str]:
     try:
         with path.open("r", encoding="utf-8", errors="ignore") as f:
@@ -466,6 +479,68 @@ def get_model_max_len(model, tokenizer, default_cap: int = 4096) -> int:
         cands.append(tm)
     return min(cands) if cands else default_cap
 
+import os
+from transformers import AutoTokenizer, AutoModelForCausalLM
+from huggingface_hub import snapshot_download
+
+def load_model(
+    hf_repo: str,
+    trust_remote_code: bool = False,
+    use_fast: bool = True,
+    model_kwargs: dict | None = None,
+    tokenizer_kwargs: dict | None = None,
+    local_only: bool = True
+):
+    """
+    Load a model and tokenizer from local cache only (no download), optionally
+    caching them if not already available.
+
+    Returns: (tokenizer, model)
+    """
+    model_kwargs = model_kwargs or {}
+    tokenizer_kwargs = tokenizer_kwargs or {}
+    os.environ["TRANSFORMERS_OFFLINE"] = "1"  # ensure no HTTP calls
+    os.environ["HF_DATASETS_OFFLINE"] = "1"
+
+
+    try:
+        tokenizer = AutoTokenizer.from_pretrained(
+            hf_repo,
+            use_fast=use_fast,
+            trust_remote_code=trust_remote_code,
+            local_files_only=local_only,
+            **tokenizer_kwargs
+        )
+        model = AutoModelForCausalLM.from_pretrained(
+            hf_repo,
+            trust_remote_code=trust_remote_code,
+            local_files_only=local_only,
+            **(model_kwargs or {})
+        )
+        return tokenizer, model
+    except Exception as e:
+        if not local_only:
+            raise
+        # Try to populate the cache offline, then reattempt load
+        logging.info(f"'{hf_repo}' not found in cache; snapshotting locally...")
+        snapshot_download(repo_id=hf_repo, local_files_only=False)  # requires connectivity
+        os.environ["TRANSFORMERS_OFFLINE"] = "1"
+        tokenizer = AutoTokenizer.from_pretrained(
+            hf_repo,
+            use_fast=use_fast,
+            trust_remote_code=trust_remote_code,
+            local_files_only=True,
+            **tokenizer_kwargs
+        )
+        model = AutoModelForCausalLM.from_pretrained(
+            hf_repo,
+            trust_remote_code=trust_remote_code,
+            local_files_only=True,
+            **(model_kwargs or {})
+        )
+        return tokenizer, model
+
+
 # --------------------
 # Training runner with OOM fallback
 # --------------------
@@ -484,22 +559,23 @@ def run_for_model(model_cfg: Dict[str, Any], args: argparse.Namespace, global_ou
     
     accelerator, precision, devices = select_accel_precision_devices()
     # Tokenizer & model
-    LOG.info(f"Loading tokenizer: {hf_repo}")
-    tokenizer = AutoTokenizer.from_pretrained(hf_repo, use_fast=True, trust_remote_code=trust_remote_code)
+
+    LOG.info(f"Loading tokenizer & model for '{hf_repo}' from cache...")
+    tokenizer, model = load_model(
+        hf_repo,
+        trust_remote_code=trust_remote_code,
+        model_kwargs={
+            "torch_dtype": (torch.bfloat16 if torch.cuda.is_available() else torch.float32),
+            "device_map": "auto" if torch.cuda.is_available() else None
+        }
+    )
+
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token or tokenizer.cls_token
-   
+
     tokenizer.truncation_side = "left"     # keep the tail
     tokenizer.padding_side = "right"       # usual default
 
-
-
-    LOG.info(f"Loading model: {hf_repo} (size {size_b})")
-    try:
-        model = AutoModelForCausalLM.from_pretrained(hf_repo, trust_remote_code=trust_remote_code)
-    except Exception as e:
-        LOG.error(f"Failed to load model {hf_repo}: {e}")
-        return
 
     # Gradient checkpointing
     try:
@@ -711,6 +787,9 @@ def main():
 
     # Seeding (Lightning 2.x)
     seed_everything(args.seed, workers=True)
+    cfg["models"] = sort_models_by_size(cfg["models"])
+    for m in cfg["models"]:
+        print(f"Found model in cfg {m['hf_repo']} with params {m['size_b']}")
 
     if args.model is not None:
         cfg["models"] = [mdl for mdl in cfg["models"] if mdl["hf_repo"] == args.model]
