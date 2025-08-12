@@ -416,6 +416,32 @@ def autoscale_batch_size_mps_safe(lit_module, datamodule, accelerator, devices, 
         torch.mps.empty_cache()
     return new_bs
 
+def suggested_num_workers(cap: int | None = None) -> int:
+    import os
+    # 1) What PyTorch uses for the warning: count of allowed logical CPUs (Linux cpuset)
+    try:
+        max_allowed = len(os.sched_getaffinity(0))
+    except AttributeError:
+        # macOS / others (no cpuset): fall back to all CPUs
+        max_allowed = os.cpu_count() or 2
+
+    # 2) If running under SLURM, cap to CPUs-per-task (often stricter)
+    slurm_cpt = os.environ.get("SLURM_CPUS_PER_TASK")
+    if slurm_cpt:
+        try:
+            max_allowed = min(max_allowed, int(slurm_cpt))
+        except ValueError:
+            pass
+
+    # 3) Leave one core for the main process; enforce >=1
+    n = max(1, max_allowed - 1)
+
+    # Optional global cap (e.g., avoid silly values on huge nodes)
+    if cap is not None:
+        n = min(n, cap)
+    return n
+
+
 # --------------------
 # Training runner with OOM fallback
 # --------------------
@@ -456,7 +482,8 @@ def run_for_model(model_cfg: Dict[str, Any], args: argparse.Namespace, global_ou
         LOG.warning(f"Could not enable gradient checkpointing: {e}")
 
     # Data
-    num_workers = max(1, (os.cpu_count() or 2) - 1)
+    # num_workers = max(1, (os.cpu_count() or 2) - 1)
+    num_workers = suggested_num_workers()   # e.g., becomes 1 if SLURM grants 2 CPUs
     pin_memory = (accelerator == "gpu")  # pin memory is meaningful for CUDA
     datamodule = SimpleDataModule(
         data_dir=Path(args.data_dir),
@@ -519,10 +546,10 @@ def run_for_model(model_cfg: Dict[str, Any], args: argparse.Namespace, global_ou
                 LOG.info(f"Auto-scaled batch size (MPS-safe): {new_bs}")
         except RuntimeError as e:
             LOG.warning(f"Batch-size tuning failed on this device: {e}. Will continue with OOM backoff.")
-            datamodule.batch_size = int(datamodule.batch_size / 4)
+            # datamodule.batch_size = int(datamodule.batch_size / 4)
             # maybe  
-            # if torch.backends.mps.is_available():
-                # datamodule.batch_size = int(datamodule.batch_size / 4)
+            if torch.backends.mps.is_available():
+                datamodule.batch_size = int(datamodule.batch_size / 4)
             
     LOG.info(f"Chose batch size {datamodule.batch_size}")
 
