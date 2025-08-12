@@ -21,10 +21,9 @@ import os
 os.environ["TOKENIZERS_PARALLELISM"] = "false"  # safest with DataLoader workers
 os.environ["TRANSFORMERS_VERBOSITY"] = "error" 
 
-
-import sys
+# import sys
 import json
-import math
+# import math
 import argparse
 import logging
 import traceback
@@ -33,6 +32,13 @@ from pathlib import Path
 from typing import List, Dict, Any, Tuple
 
 import torch
+
+# Put this near the top of your script (right after importing torch)
+if torch.cuda.is_available():
+    torch.set_float32_matmul_precision("high")  # or "medium"
+    # Optional: for FP32 *convolutions* only
+    torch.backends.cudnn.allow_tf32 = True
+
 from torch.utils.data import Dataset, DataLoader
 from torch.optim import AdamW
 import random
