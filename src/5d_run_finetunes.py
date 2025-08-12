@@ -519,7 +519,11 @@ def run_for_model(model_cfg: Dict[str, Any], args: argparse.Namespace, global_ou
                 LOG.info(f"Auto-scaled batch size (MPS-safe): {new_bs}")
         except RuntimeError as e:
             LOG.warning(f"Batch-size tuning failed on this device: {e}. Will continue with OOM backoff.")
-            datamodule.batch_size = int(datamodule.batch_size / 2)
+            datamodule.batch_size = int(datamodule.batch_size / 4)
+            # maybe  
+            # if torch.backends.mps.is_available():
+                # datamodule.batch_size = int(datamodule.batch_size / 4)
+            
     LOG.info(f"Chose batch size {datamodule.batch_size}")
 
     # Full validation BEFORE training (beyond sanity val)
