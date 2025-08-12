@@ -270,9 +270,10 @@ class SimpleDataModule(L.LightningDataModule):
             self._train_ds,
             batch_size=self.batch_size,
             num_workers=self.num_workers,
-            pin_memory=self.pin_memory,
+            pin_memory=self.pin_memory, #this should be false if persistent_workers is true due to a bug
             drop_last=True,
-            persistent_workers=self.num_workers > 0,
+            persistent_workers=self.num_workers > 0,# this might need to be false if you see os too many files open errors
+            # persistent_workers=False, 
             prefetch_factor=1,  # was 2 by default
         )
     def val_dataloader(self):
@@ -286,6 +287,7 @@ class SimpleDataModule(L.LightningDataModule):
             pin_memory=self.pin_memory,
             drop_last=False,
             persistent_workers=self.num_workers > 0,
+            # persistent_workers=False
         )
 
 
@@ -607,7 +609,8 @@ def run_for_model(model_cfg: Dict[str, Any], args: argparse.Namespace, global_ou
     # Data
     # num_workers = max(1, (os.cpu_count() or 2) - 1)
     num_workers = suggested_num_workers()   # e.g., becomes 1 if SLURM grants 2 CPUs
-    pin_memory = (accelerator == "gpu")  # pin memory is meaningful for CUDA
+    # pin_memory = (accelerator == "gpu")  # pin memory is meaningful for CUDA
+    pin_memory = False # pinning memory causes leaky file handles so OS.too many files open
     
     safe_model_ctx = get_model_max_len(model, tokenizer)
     # Clamp your block_size so you never exceed the model’s context
@@ -698,7 +701,7 @@ def run_for_model(model_cfg: Dict[str, Any], args: argparse.Namespace, global_ou
     while bs > 0:
         try:
             LOG.info(f"Starting training with batch_size={bs}")
-            trainer.fit(lit_module, datamodule=datamodule)
+            trainer.fit(lit_module, datamodule=datamodule, ckpt_path=None) # no ckpt by default to avoid it finding the ones created in batch size estimation
             break
         except RuntimeError as e:
             msg = str(e).lower()
