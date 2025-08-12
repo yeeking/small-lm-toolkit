@@ -44,6 +44,7 @@ from lightning.pytorch.loggers import TensorBoardLogger
 from lightning.pytorch.callbacks import ModelCheckpoint, LearningRateMonitor, EarlyStopping
 from lightning.pytorch.tuner.tuning import Tuner
 
+
 from transformers import (
     AutoTokenizer,
     AutoModelForCausalLM,
@@ -74,7 +75,6 @@ def safe_read_lines(path: Path) -> List[str]:
     except Exception as e:
         LOG.warning(f"Failed to read {path}: {e}")
         return []
-
 
 def build_windows_from_lines(lines: List[str], context: int) -> List[str]:
     if context <= 0:
@@ -387,6 +387,35 @@ def select_accel_precision_devices() -> Tuple[str, str, int]:
     return "cpu", "32-true", 1
 
 
+
+def autoscale_batch_size_mps_safe(lit_module, datamodule, accelerator, devices, precision):
+    """set a viable batch size using as much VRAM as possible """
+    tune_trainer = Trainer(
+        accelerator=accelerator,
+        devices=devices,
+        precision=precision,
+        num_sanity_val_steps=0,   # no pre-fit val
+        max_epochs=1,             # we only need a few steps
+        limit_train_batches=2,    # tiny trial
+        limit_val_batches=0,      # skip val during tuning
+        enable_checkpointing=False,
+        logger=False,
+    )
+    tuner = Tuner(tune_trainer)
+    new_bs = tuner.scale_batch_size(
+        lit_module,
+        datamodule=datamodule,
+        mode="power",             # safer on MPS than "binsearch"
+        steps_per_trial=1,        # minimum work per try
+        init_val=max(1, datamodule.batch_size // 2),
+        max_trials=6,             # cap the search
+        batch_arg_name="batch_size",
+    )
+    # Clear allocator caches after tuning (important for MPS)
+    if getattr(torch.backends, "mps", None) and torch.backends.mps.is_available():
+        torch.mps.empty_cache()
+    return new_bs
+
 # --------------------
 # Training runner with OOM fallback
 # --------------------
@@ -399,9 +428,11 @@ def run_for_model(model_cfg: Dict[str, Any], args: argparse.Namespace, global_ou
     outdir = global_outdir / safe_name
     outdir.mkdir(parents=True, exist_ok=True)
 
-    logger = TensorBoardLogger(save_dir=str(outdir), name="tb")
-    accelerator, precision, devices = select_accel_precision_devices()
 
+    logger = TensorBoardLogger(save_dir=str(outdir), name=f"size_{size_b}")
+    ckpt_dir = Path(logger.log_dir) / "checkpoints" 
+    
+    accelerator, precision, devices = select_accel_precision_devices()
     # Tokenizer & model
     LOG.info(f"Loading tokenizer: {hf_repo}")
     tokenizer = AutoTokenizer.from_pretrained(hf_repo, use_fast=True, trust_remote_code=trust_remote_code)
@@ -454,7 +485,8 @@ def run_for_model(model_cfg: Dict[str, Any], args: argparse.Namespace, global_ou
             monitor="val_loss",
             mode="min",
             save_top_k=1,
-            dirpath=str(outdir / "checkpoints"),
+            dirpath=str(ckpt_dir),            # <<— inside version_X
+            # dirpath=str(outdir / "checkpoints"),
             filename="{epoch:02d}-{val_loss:.4f}",
         ),
     ]
@@ -478,20 +510,24 @@ def run_for_model(model_cfg: Dict[str, Any], args: argparse.Namespace, global_ou
         num_sanity_val_steps=0,  # skip extra pre-training val
     )
 
-    # Optional batch size autoscaling via Tuner (Lightning 2.x)
     if args.auto_scale_bs:
-        LOG.info("Running batch size auto-scaling (binsearch).")
-        tuner = Tuner(trainer)
-        new_bs = tuner.scale_batch_size(lit_module, datamodule=datamodule, mode="binsearch")
-        LOG.info(f"Auto-scaled batch size: {new_bs}")
-        datamodule.batch_size = new_bs
+        LOG.info(f"Prior to auto-scaling, batch size is {datamodule.batch_size}")
+        try:
+            new_bs = autoscale_batch_size_mps_safe(lit_module, datamodule, accelerator, devices, precision)
+            if new_bs: 
+                datamodule.batch_size = new_bs
+                LOG.info(f"Auto-scaled batch size (MPS-safe): {new_bs}")
+        except RuntimeError as e:
+            LOG.warning(f"Batch-size tuning failed on this device: {e}. Will continue with OOM backoff.")
+            datamodule.batch_size = int(datamodule.batch_size / 2)
+    LOG.info(f"Chose batch size {datamodule.batch_size}")
 
     # Full validation BEFORE training (beyond sanity val)
     LOG.info("Running initial full validation...")
-    try:
-        trainer.validate(lit_module, datamodule=datamodule, verbose=False)
-    except Exception as e:
-        LOG.warning(f"Initial validation encountered an issue (continuing): {e}")
+    # try:
+    trainer.validate(lit_module, datamodule=datamodule, verbose=False)
+    # except Exception as e:
+        # LOG.warning(f"Initial validation encountered an issue (continuing): {e}")
 
     # Train with OOM fallback (halve batch size until it fits)
     bs = datamodule.batch_size
@@ -553,7 +589,7 @@ def parse_args():
     p.add_argument("--out_dir", type=str, default="./runs", help="Output root directory")
     p.add_argument("--epochs", type=int, default=3)
     p.add_argument("--batch_size", type=int, default=4, help="Starting batch size (may be auto-scaled or reduced on OOM)")    
-    p.add_argument("--auto_scale_bs", action="store_true", help="Use Lightning Tuner to auto-scale batch size")
+    # p.add_argument("--auto_scale_bs", action="store_true", help="Use Lightning Tuner to auto-scale batch size")
     p.add_argument("--accumulate_grad_batches", type=int, default=1)
     p.add_argument("--block_size", type=int, default=512, help="Max tokens per example")
     p.add_argument("--context", type=int, default=3, help="Number of previous lines as context")
@@ -564,6 +600,13 @@ def parse_args():
     p.add_argument("--seed", type=int, default=42)
     p.add_argument("--early_stopping_patience", type=int, default=2)
     p.add_argument("--sample_max_new_tokens", type=int, default=64, help="Tokens to generate for sample predictions")
+   
+    p.add_argument("--auto_scale_bs", action="store_true", help="Auto-tune batch size with Lightning Tuner")
+    p.add_argument("--bs_mode", type=str, default="binsearch", choices=["power", "binsearch"])
+    p.add_argument("--bs_init", type=int, default=None, help="Initial batch size to start search with (defaults to --batch_size)")
+    p.add_argument("--bs_max_trials", type=int, default=10, help="Max doublings before binary search terminates")
+    p.add_argument("--bs_steps_per_trial", type=int, default=3, help="Steps to try per candidate batch size")
+
     return p.parse_args()
 
 
