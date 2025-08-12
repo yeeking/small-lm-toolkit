@@ -35,6 +35,8 @@ from typing import List, Dict, Any, Tuple
 import torch
 from torch.utils.data import Dataset, DataLoader
 from torch.optim import AdamW
+import random
+from torch.utils.data import IterableDataset, get_worker_info
 
 import lightning as L
 from lightning.pytorch import Trainer, seed_everything
@@ -118,6 +120,51 @@ class WindowTextDataset(Dataset):
             "labels": input_ids.clone(),  # standard causal LM loss
         }
 
+# TrainIterableDataset: change ctor signature
+class TrainIterableDataset(IterableDataset):
+    def __init__(self, files, tok_name_or_path: str, tok_kwargs: dict,
+                 block_size: int, context: int, shuffle_files: bool = True):
+        super().__init__()
+        self.files = list(files)
+        self.tok_name_or_path = tok_name_or_path
+        self.tok_kwargs = tok_kwargs
+        self.block_size = block_size
+        self.context = context
+        self.shuffle_files = shuffle_files
+        self._tok = None  # lazy per-process
+
+    def _tokenizer(self):
+        if self._tok is None:
+            from transformers import AutoTokenizer
+            self._tok = AutoTokenizer.from_pretrained(self.tok_name_or_path, **self.tok_kwargs)
+            if self._tok.pad_token is None:
+                self._tok.pad_token = self._tok.eos_token or self._tok.cls_token
+        return self._tok
+
+    def _yield_windows_from_file(self, path: Path):
+        lines = safe_read_lines(path)
+        for i in range(self.context, len(lines)):
+            yield "\n".join(lines[i-self.context:i] + [lines[i]])
+
+    def __iter__(self):
+        import random, torch
+        rng = random.Random(torch.initial_seed() % (2**32))
+        worker = get_worker_info()
+        file_iter = self.files if worker is None else self.files[worker.id :: worker.num_workers]
+        file_iter = list(file_iter)
+        if self.shuffle_files:
+            rng.shuffle(file_iter)
+
+        tok = self._tokenizer()
+        for p in file_iter:
+            for text in self._yield_windows_from_file(p):
+                enc = tok(text, truncation=True, max_length=self.block_size, padding="max_length")
+                yield {
+                    "input_ids": torch.tensor(enc["input_ids"], dtype=torch.long),
+                    "attention_mask": torch.tensor(enc["attention_mask"], dtype=torch.long),
+                    "labels": torch.tensor(enc["input_ids"], dtype=torch.long),
+                }
+
 
 # --------------------
 # Lightning DataModule
@@ -144,55 +191,66 @@ class SimpleDataModule(L.LightningDataModule):
         self.pin_memory = pin_memory
         self.val_sample_count = val_sample_count
 
-        self._train_ds = None
-        self._val_ds = None
-        self.val_preview_texts: List[str] = []
+        self._train_files: list[Path] | None = None
+        self._train_ds = None          # built lazily in train_dataloader
+        self._val_ds: WindowTextDataset | None = None
+        self.val_preview_texts: list[str] = []
 
     def setup(self, stage: str | None = None):
         train_root = self.data_dir / "training"
-        val_root = self.data_dir / "validation"
-
-        # Assertions per spec
+        val_root   = self.data_dir / "validation"
         assert train_root.exists(), f"Training directory not found: {train_root}"
-        assert val_root.exists(), f"Validation directory not found: {val_root}"
+        assert val_root.exists(),   f"Validation directory not found: {val_root}"
 
-        train_files = find_text_files(train_root)
-        val_files = find_text_files(val_root)
+        # Build ONLY what the stage needs:
+        if stage in (None, "validate"):
+            if self._val_ds is None:
+                val_files = find_text_files(val_root)
+                assert len(val_files) > 0, "No validation files found"
+                val_lines: list[str] = []
+                for p in val_files:
+                    val_lines.extend(safe_read_lines(p))
+                assert val_lines, "Validation files contained no usable text"
+                val_windows = build_windows_from_lines(val_lines, self.context)
+                self.val_preview_texts = val_windows[: self.val_sample_count]
+                self._val_ds = WindowTextDataset(val_windows, self.tokenizer, self.block_size)
+                LOG.info(f"Val samples: {len(self._val_ds)}")
 
-        assert len(train_files) > 0, "No training files found"
-        assert len(val_files) > 0, "No validation files found"
-
-        train_lines: List[str] = []
-        for p in train_files:
-            train_lines.extend(safe_read_lines(p))
-        val_lines: List[str] = []
-        for p in val_files:
-            val_lines.extend(safe_read_lines(p))
-
-        assert len(train_lines) > 0, "Training files contained no usable text"
-        assert len(val_lines) > 0, "Validation files contained no usable text"
-
-        train_windows = build_windows_from_lines(train_lines, self.context)
-        val_windows = build_windows_from_lines(val_lines, self.context)
-
-        self.val_preview_texts = val_windows[: self.val_sample_count]
-
-        self._train_ds = WindowTextDataset(train_windows, self.tokenizer, self.block_size)
-        self._val_ds = WindowTextDataset(val_windows, self.tokenizer, self.block_size)
-
-        LOG.info(f"Train samples: {len(self._train_ds)} | Val samples: {len(self._val_ds)}")
+        if stage in (None, "fit"):
+            if self._train_files is None:
+                train_files = find_text_files(train_root)
+                assert len(train_files) > 0, "No training files found"
+                # store file list only; dataset is created lazily in train_dataloader()
+                self._train_files = train_files
+                LOG.info(f"Train files: {len(self._train_files)}")
+            # Ensure val exists during fit (if validate() wasn’t called earlier)
+            if self._val_ds is None:
+                self.setup(stage="validate")
 
     def train_dataloader(self):
+        # Build the iterable dataset lazily so we don't pre-load training data
+        if self._train_files is None:
+            self.setup(stage="fit")
+        self._train_ds = TrainIterableDataset(
+            files=self._train_files,
+            tok_name_or_path=self.tokenizer.name_or_path,   # <- pass name/path, not object
+            tok_kwargs={"use_fast": True, "trust_remote_code": getattr(self.tokenizer, "init_kwargs", {}).get("trust_remote_code", False)},
+            block_size=self.block_size,
+            context=self.context,
+            shuffle_files=True,
+        )
         return DataLoader(
             self._train_ds,
             batch_size=self.batch_size,
-            shuffle=True,
             num_workers=self.num_workers,
             pin_memory=self.pin_memory,
             drop_last=True,
+            persistent_workers=self.num_workers > 0,
+            prefetch_factor=1,  # was 2 by default
         )
-
     def val_dataloader(self):
+        if self._val_ds is None:
+            self.setup(stage="validate")
         return DataLoader(
             self._val_ds,
             batch_size=self.batch_size,
@@ -200,7 +258,9 @@ class SimpleDataModule(L.LightningDataModule):
             num_workers=self.num_workers,
             pin_memory=self.pin_memory,
             drop_last=False,
+            persistent_workers=self.num_workers > 0,
         )
+
 
 
 # --------------------
@@ -294,26 +354,17 @@ class CausalLMModule(L.LightningModule):
 
     def configure_optimizers(self):
         optimizer = AdamW(self.parameters(), lr=self.lr, weight_decay=self.weight_decay)
-
-        # Estimate total steps the Lightning 2.x way
-        total_steps = getattr(self.trainer, "estimated_stepping_batches", None)
-        if total_steps is None:
-            train_batches = len(self.trainer.datamodule.train_dataloader())  # type: ignore[attr-defined]
-            total_steps = train_batches * self.trainer.max_epochs
+        # Prefer trainer.max_steps if provided
+        total_steps = getattr(self.trainer, "max_steps", None)
+        if not total_steps or total_steps < 0:
+            total_steps = getattr(self.trainer, "estimated_stepping_batches", None)
+        if not total_steps or total_steps <= 0:
+            # last-resort fallback (e.g., user forgot --max_steps). keep small but nonzero.
+            total_steps = 1000
 
         warmup_steps = max(1, int(total_steps * self.warmup_ratio))
-        scheduler = get_linear_schedule_with_warmup(
-            optimizer, num_warmup_steps=warmup_steps, num_training_steps=total_steps
-        )
-        return {
-            "optimizer": optimizer,
-            "lr_scheduler": {
-                "scheduler": scheduler,
-                "interval": "step",
-                "frequency": 1,
-                "name": "linear_warmup",
-            },
-        }
+        scheduler = get_linear_schedule_with_warmup(optimizer, warmup_steps, total_steps)
+        return {"optimizer": optimizer, "lr_scheduler": {"scheduler": scheduler, "interval": "step", "name": "linear_warmup"}}
 
 
 # --------------------
@@ -419,10 +470,12 @@ def run_for_model(model_cfg: Dict[str, Any], args: argparse.Namespace, global_ou
         logger=logger,
         callbacks=callbacks,
         log_every_n_steps=10,
+        # max_steps=args.max_steps,  # if set, bypasses step estimation
         deterministic=False,
         enable_progress_bar=True,
         # checkpointing is enabled by default; explicit for clarity
         enable_checkpointing=True,
+        num_sanity_val_steps=0,  # skip extra pre-training val
     )
 
     # Optional batch size autoscaling via Tuner (Lightning 2.x)
@@ -499,7 +552,7 @@ def parse_args():
     p.add_argument("--data_dir", type=str, required=True, help="Data directory with training/ and validation/")
     p.add_argument("--out_dir", type=str, default="./runs", help="Output root directory")
     p.add_argument("--epochs", type=int, default=3)
-    p.add_argument("--batch_size", type=int, default=4, help="Starting batch size (may be auto-scaled or reduced on OOM)")
+    p.add_argument("--batch_size", type=int, default=4, help="Starting batch size (may be auto-scaled or reduced on OOM)")    
     p.add_argument("--auto_scale_bs", action="store_true", help="Use Lightning Tuner to auto-scale batch size")
     p.add_argument("--accumulate_grad_batches", type=int, default=1)
     p.add_argument("--block_size", type=int, default=512, help="Max tokens per example")
@@ -550,12 +603,12 @@ def main():
     # Train/evaluate each model
     for m in cfg["models"]:
         LOG.info(f"=== Model: {m['hf_repo']} (size {m['size_b']}) ===")
-        try:
-            run_for_model(m, args, out_root)
-        except Exception as e:
-            LOG.error(f"Fatal error for model {m['hf_repo']}: {e}")
-            LOG.debug(traceback.format_exc())
-            LOG.info("Continuing to next model...")
+        # try:
+        run_for_model(m, args, out_root)
+        # except Exception as e:
+        #     LOG.error(f"Fatal error for model {m['hf_repo']}: {e}")
+        #     LOG.debug(traceback.format_exc())
+        #     LOG.info("Continuing to next model...")
 
     LOG.info("All done.")
 
