@@ -1,0 +1,25 @@
+script=../../src/small-lm-toolkit/src/5d_run_finetunes.py
+config=../../src/small-lm-toolkit/data/models_plan.json
+dataset=../../src/small-lm-toolkit/data/models_plan.json
+
+python $script --config $config --data_dir $dataset --epochs 1 --auto_scale_bs --model "EleutherAI/pythia-70m"
+python $script --config $config --data_dir $dataset --epochs 1 --auto_scale_bs --model "openai-community/gpt2"
+python $script --config $config --data_dir $dataset --epochs 1 --auto_scale_bs --model "HuggingFaceTB/SmolLM-135M"
+python $script --config $config --data_dir $dataset --epochs 1 --auto_scale_bs --model "EleutherAI/pythia-160m"
+python $script --config $config --data_dir $dataset --epochs 1 --auto_scale_bs --model "openai-community/gpt2-medium"
+python $script --config $config --data_dir $dataset --epochs 1 --auto_scale_bs --model "HuggingFaceTB/SmolLM-360M"
+python $script --config $config --data_dir $dataset --epochs 1 --auto_scale_bs --model "EleutherAI/pythia-410m"
+python $script --config $config --data_dir $dataset --epochs 1 --auto_scale_bs --model "Qwen/Qwen2.5-0.5B"
+python $script --config $config --data_dir $dataset --epochs 1 --auto_scale_bs --model "tiiuae/Falcon-H1-0.5B-Base"
+python $script --config $config --data_dir $dataset --epochs 1 --auto_scale_bs --model "Qwen/Qwen3-0.6B-Base"
+python $script --config $config --data_dir $dataset --epochs 1 --auto_scale_bs --model "openai-community/gpt2-large"
+python $script --config $config --data_dir $dataset --epochs 1 --auto_scale_bs --model "EleutherAI/pythia-1b"
+python $script --config $config --data_dir $dataset --epochs 1 --auto_scale_bs --model "tiiuae/Falcon3-1B-Base"
+python $script --config $config --data_dir $dataset --epochs 1 --auto_scale_bs --model "microsoft/phi-1_5"
+python $script --config $config --data_dir $dataset --epochs 1 --auto_scale_bs --model "EleutherAI/pythia-1.4b"
+python $script --config $config --data_dir $dataset --epochs 1 --auto_scale_bs --model "openai-community/gpt2-xl"
+python $script --config $config --data_dir $dataset --epochs 1 --auto_scale_bs --model "Qwen/Qwen2.5-1.5B"
+python $script --config $config --data_dir $dataset --epochs 1 --auto_scale_bs --model "tiiuae/Falcon-H1-1.5B-Base"
+python $script --config $config --data_dir $dataset --epochs 1 --auto_scale_bs --model "HuggingFaceTB/SmolLM-1.7B"
+python $script --config $config --data_dir $dataset --epochs 1 --auto_scale_bs --model "Qwen/Qwen3-1.7B-Base"
+python $script --config $config --data_dir $dataset --epochs 1 --auto_scale_bs --model "EleutherAI/pythia-2.8b"
