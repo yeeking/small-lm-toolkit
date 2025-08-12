@@ -1,0 +1,236 @@
+{
+    "models": [
+        {
+            "family": "Pythia",
+            "size_b": 0.07,
+            "hf_repo": "EleutherAI/pythia-70m",
+            "tokenizer": "AutoTokenizer",
+            "model_class": "AutoModelForCausalLM",
+            "trust_remote_code": false,
+            "eos_token_literal": "<|endoftext|>",
+            "load_snippet_py": "from transformers import AutoTokenizer, AutoModelForCausalLM\nimport torch\n\nmodel_id = \"EleutherAI/pythia-70m\"\ntokenizer = AutoTokenizer.from_pretrained(model_id, trust_remote_code=False)\nmodel = AutoModelForCausalLM.from_pretrained(\n    model_id,\n    torch_dtype=torch.bfloat16 if torch.cuda.is_available() else torch.float32,\n    device_map=\"auto\" if torch.cuda.is_available() else None,\n    trust_remote_code=False,\n)\nmodel.eval()",
+            "prepare_text_file_snippet_py": "from transformers import AutoTokenizer\nimport torch\n\ndef prepare_text_file(path, model_id=\"EleutherAI/pythia-70m\", max_length=1024, add_eos=True):\n    tokenizer = AutoTokenizer.from_pretrained(model_id, trust_remote_code=False)\n    with open(path, \"r\", encoding=\"utf-8\") as f:\n        text = f.read()\n\n    if add_eos and tokenizer.eos_token is not None:\n        eos = tokenizer.eos_token\n        if not text.rstrip().endswith(eos):\n            text = text.rstrip() + \"<|endoftext|>\"\n\n    enc = tokenizer(\n        text,\n        return_tensors=\"pt\",\n        truncation=True,\n        max_length=max_length,\n    )\n    return enc"
+        },
+        {
+            "family": "GPT-2",
+            "size_b": 0.124,
+            "hf_repo": "openai-community/gpt2",
+            "tokenizer": "AutoTokenizer",
+            "model_class": "AutoModelForCausalLM",
+            "trust_remote_code": false,
+            "eos_token_literal": "<|endoftext|>",
+            "load_snippet_py": "from transformers import AutoTokenizer, AutoModelForCausalLM\nimport torch\n\nmodel_id = \"openai-community/gpt2\"\ntokenizer = AutoTokenizer.from_pretrained(model_id, trust_remote_code=False)\nmodel = AutoModelForCausalLM.from_pretrained(\n    model_id,\n    torch_dtype=torch.bfloat16 if torch.cuda.is_available() else torch.float32,\n    device_map=\"auto\" if torch.cuda.is_available() else None,\n    trust_remote_code=False,\n)\nmodel.eval()",
+            "prepare_text_file_snippet_py": "from transformers import AutoTokenizer\nimport torch\n\ndef prepare_text_file(path, model_id=\"openai-community/gpt2\", max_length=1024, add_eos=True):\n    tokenizer = AutoTokenizer.from_pretrained(model_id, trust_remote_code=False)\n    with open(path, \"r\", encoding=\"utf-8\") as f:\n        text = f.read()\n\n    if add_eos and tokenizer.eos_token is not None:\n        eos = tokenizer.eos_token\n        if not text.rstrip().endswith(eos):\n            text = text.rstrip() + \"<|endoftext|>\"\n\n    enc = tokenizer(\n        text,\n        return_tensors=\"pt\",\n        truncation=True,\n        max_length=max_length,\n    )\n    return enc"
+        },
+        {
+            "family": "SmolLM",
+            "size_b": 0.135,
+            "hf_repo": "HuggingFaceTB/SmolLM-135M",
+            "tokenizer": "AutoTokenizer",
+            "model_class": "AutoModelForCausalLM",
+            "trust_remote_code": false,
+            "eos_token_literal": "<|endoftext|>",
+            "load_snippet_py": "from transformers import AutoTokenizer, AutoModelForCausalLM\nimport torch\n\nmodel_id = \"HuggingFaceTB/SmolLM-135M\"\ntokenizer = AutoTokenizer.from_pretrained(model_id, trust_remote_code=False)\nmodel = AutoModelForCausalLM.from_pretrained(\n    model_id,\n    torch_dtype=torch.bfloat16 if torch.cuda.is_available() else torch.float32,\n    device_map=\"auto\" if torch.cuda.is_available() else None,\n    trust_remote_code=False,\n)\nmodel.eval()",
+            "prepare_text_file_snippet_py": "from transformers import AutoTokenizer\nimport torch\n\ndef prepare_text_file(path, model_id=\"HuggingFaceTB/SmolLM-135M\", max_length=1024, add_eos=True):\n    tokenizer = AutoTokenizer.from_pretrained(model_id, trust_remote_code=False)\n    with open(path, \"r\", encoding=\"utf-8\") as f:\n        text = f.read()\n\n    if add_eos and tokenizer.eos_token is not None:\n        eos = tokenizer.eos_token\n        if not text.rstrip().endswith(eos):\n            text = text.rstrip() + \"<|endoftext|>\"\n\n    enc = tokenizer(\n        text,\n        return_tensors=\"pt\",\n        truncation=True,\n        max_length=max_length,\n    )\n    return enc"
+        },
+        {
+            "family": "Pythia",
+            "size_b": 0.16,
+            "hf_repo": "EleutherAI/pythia-160m",
+            "tokenizer": "AutoTokenizer",
+            "model_class": "AutoModelForCausalLM",
+            "trust_remote_code": false,
+            "eos_token_literal": "<|endoftext|>",
+            "load_snippet_py": "from transformers import AutoTokenizer, AutoModelForCausalLM\nimport torch\n\nmodel_id = \"EleutherAI/pythia-160m\"\ntokenizer = AutoTokenizer.from_pretrained(model_id, trust_remote_code=False)\nmodel = AutoModelForCausalLM.from_pretrained(\n    model_id,\n    torch_dtype=torch.bfloat16 if torch.cuda.is_available() else torch.float32,\n    device_map=\"auto\" if torch.cuda.is_available() else None,\n    trust_remote_code=False,\n)\nmodel.eval()",
+            "prepare_text_file_snippet_py": "from transformers import AutoTokenizer\nimport torch\n\ndef prepare_text_file(path, model_id=\"EleutherAI/pythia-160m\", max_length=1024, add_eos=True):\n    tokenizer = AutoTokenizer.from_pretrained(model_id, trust_remote_code=False)\n    with open(path, \"r\", encoding=\"utf-8\") as f:\n        text = f.read()\n\n    if add_eos and tokenizer.eos_token is not None:\n        eos = tokenizer.eos_token\n        if not text.rstrip().endswith(eos):\n            text = text.rstrip() + \"<|endoftext|>\"\n\n    enc = tokenizer(\n        text,\n        return_tensors=\"pt\",\n        truncation=True,\n        max_length=max_length,\n    )\n    return enc"
+        },
+        {
+            "family": "GPT-2",
+            "size_b": 0.355,
+            "hf_repo": "openai-community/gpt2-medium",
+            "tokenizer": "AutoTokenizer",
+            "model_class": "AutoModelForCausalLM",
+            "trust_remote_code": false,
+            "eos_token_literal": "<|endoftext|>",
+            "load_snippet_py": "from transformers import AutoTokenizer, AutoModelForCausalLM\nimport torch\n\nmodel_id = \"openai-community/gpt2-medium\"\ntokenizer = AutoTokenizer.from_pretrained(model_id, trust_remote_code=False)\nmodel = AutoModelForCausalLM.from_pretrained(\n    model_id,\n    torch_dtype=torch.bfloat16 if torch.cuda.is_available() else torch.float32,\n    device_map=\"auto\" if torch.cuda.is_available() else None,\n    trust_remote_code=False,\n)\nmodel.eval()",
+            "prepare_text_file_snippet_py": "from transformers import AutoTokenizer\nimport torch\n\ndef prepare_text_file(path, model_id=\"openai-community/gpt2-medium\", max_length=1024, add_eos=True):\n    tokenizer = AutoTokenizer.from_pretrained(model_id, trust_remote_code=False)\n    with open(path, \"r\", encoding=\"utf-8\") as f:\n        text = f.read()\n\n    if add_eos and tokenizer.eos_token is not None:\n        eos = tokenizer.eos_token\n        if not text.rstrip().endswith(eos):\n            text = text.rstrip() + \"<|endoftext|>\"\n\n    enc = tokenizer(\n        text,\n        return_tensors=\"pt\",\n        truncation=True,\n        max_length=max_length,\n    )\n    return enc"
+        },
+        {
+            "family": "SmolLM",
+            "size_b": 0.36,
+            "hf_repo": "HuggingFaceTB/SmolLM-360M",
+            "tokenizer": "AutoTokenizer",
+            "model_class": "AutoModelForCausalLM",
+            "trust_remote_code": false,
+            "eos_token_literal": "<|endoftext|>",
+            "load_snippet_py": "from transformers import AutoTokenizer, AutoModelForCausalLM\nimport torch\n\nmodel_id = \"HuggingFaceTB/SmolLM-360M\"\ntokenizer = AutoTokenizer.from_pretrained(model_id, trust_remote_code=False)\nmodel = AutoModelForCausalLM.from_pretrained(\n    model_id,\n    torch_dtype=torch.bfloat16 if torch.cuda.is_available() else torch.float32,\n    device_map=\"auto\" if torch.cuda.is_available() else None,\n    trust_remote_code=False,\n)\nmodel.eval()",
+            "prepare_text_file_snippet_py": "from transformers import AutoTokenizer\nimport torch\n\ndef prepare_text_file(path, model_id=\"HuggingFaceTB/SmolLM-360M\", max_length=1024, add_eos=True):\n    tokenizer = AutoTokenizer.from_pretrained(model_id, trust_remote_code=False)\n    with open(path, \"r\", encoding=\"utf-8\") as f:\n        text = f.read()\n\n    if add_eos and tokenizer.eos_token is not None:\n        eos = tokenizer.eos_token\n        if not text.rstrip().endswith(eos):\n            text = text.rstrip() + \"<|endoftext|>\"\n\n    enc = tokenizer(\n        text,\n        return_tensors=\"pt\",\n        truncation=True,\n        max_length=max_length,\n    )\n    return enc"
+        },
+        {
+            "family": "Pythia",
+            "size_b": 0.41,
+            "hf_repo": "EleutherAI/pythia-410m",
+            "tokenizer": "AutoTokenizer",
+            "model_class": "AutoModelForCausalLM",
+            "trust_remote_code": false,
+            "eos_token_literal": "<|endoftext|>",
+            "load_snippet_py": "from transformers import AutoTokenizer, AutoModelForCausalLM\nimport torch\n\nmodel_id = \"EleutherAI/pythia-410m\"\ntokenizer = AutoTokenizer.from_pretrained(model_id, trust_remote_code=False)\nmodel = AutoModelForCausalLM.from_pretrained(\n    model_id,\n    torch_dtype=torch.bfloat16 if torch.cuda.is_available() else torch.float32,\n    device_map=\"auto\" if torch.cuda.is_available() else None,\n    trust_remote_code=False,\n)\nmodel.eval()",
+            "prepare_text_file_snippet_py": "from transformers import AutoTokenizer\nimport torch\n\ndef prepare_text_file(path, model_id=\"EleutherAI/pythia-410m\", max_length=1024, add_eos=True):\n    tokenizer = AutoTokenizer.from_pretrained(model_id, trust_remote_code=False)\n    with open(path, \"r\", encoding=\"utf-8\") as f:\n        text = f.read()\n\n    if add_eos and tokenizer.eos_token is not None:\n        eos = tokenizer.eos_token\n        if not text.rstrip().endswith(eos):\n            text = text.rstrip() + \"<|endoftext|>\"\n\n    enc = tokenizer(\n        text,\n        return_tensors=\"pt\",\n        truncation=True,\n        max_length=max_length,\n    )\n    return enc"
+        },
+        {
+            "family": "Qwen2.5",
+            "size_b": 0.5,
+            "hf_repo": "Qwen/Qwen2.5-0.5B",
+            "tokenizer": "AutoTokenizer",
+            "model_class": "AutoModelForCausalLM",
+            "trust_remote_code": true,
+            "eos_token_literal": "<|endoftext|>",
+            "load_snippet_py": "from transformers import AutoTokenizer, AutoModelForCausalLM\nimport torch\n\nmodel_id = \"Qwen/Qwen2.5-0.5B\"\ntokenizer = AutoTokenizer.from_pretrained(model_id, trust_remote_code=True)\nmodel = AutoModelForCausalLM.from_pretrained(\n    model_id,\n    torch_dtype=torch.bfloat16 if torch.cuda.is_available() else torch.float32,\n    device_map=\"auto\" if torch.cuda.is_available() else None,\n    trust_remote_code=True,\n)\nmodel.eval()",
+            "prepare_text_file_snippet_py": "from transformers import AutoTokenizer\nimport torch\n\ndef prepare_text_file(path, model_id=\"Qwen/Qwen2.5-0.5B\", max_length=1024, add_eos=True):\n    tokenizer = AutoTokenizer.from_pretrained(model_id, trust_remote_code=True)\n    with open(path, \"r\", encoding=\"utf-8\") as f:\n        text = f.read()\n\n    if add_eos and tokenizer.eos_token is not None:\n        eos = tokenizer.eos_token\n        if not text.rstrip().endswith(eos):\n            text = text.rstrip() + \"<|endoftext|>\"\n\n    enc = tokenizer(\n        text,\n        return_tensors=\"pt\",\n        truncation=True,\n        max_length=max_length,\n    )\n    return enc"
+        },
+        {
+            "family": "Falcon-H1",
+            "size_b": 0.5,
+            "hf_repo": "tiiuae/Falcon-H1-0.5B-Base",
+            "tokenizer": "AutoTokenizer",
+            "model_class": "AutoModelForCausalLM",
+            "trust_remote_code": true,
+            "eos_token_literal": "<|endoftext|>",
+            "load_snippet_py": "from transformers import AutoTokenizer, AutoModelForCausalLM\nimport torch\n\nmodel_id = \"tiiuae/Falcon-H1-0.5B-Base\"\ntokenizer = AutoTokenizer.from_pretrained(model_id, trust_remote_code=True)\nmodel = AutoModelForCausalLM.from_pretrained(\n    model_id,\n    torch_dtype=torch.bfloat16 if torch.cuda.is_available() else torch.float32,\n    device_map=\"auto\" if torch.cuda.is_available() else None,\n    trust_remote_code=True,\n)\nmodel.eval()",
+            "prepare_text_file_snippet_py": "from transformers import AutoTokenizer\nimport torch\n\ndef prepare_text_file(path, model_id=\"tiiuae/Falcon-H1-0.5B-Base\", max_length=1024, add_eos=True):\n    tokenizer = AutoTokenizer.from_pretrained(model_id, trust_remote_code=True)\n    with open(path, \"r\", encoding=\"utf-8\") as f:\n        text = f.read()\n\n    if add_eos and tokenizer.eos_token is not None:\n        eos = tokenizer.eos_token\n        if not text.rstrip().endswith(eos):\n            text = text.rstrip() + \"<|endoftext|>\"\n\n    enc = tokenizer(\n        text,\n        return_tensors=\"pt\",\n        truncation=True,\n        max_length=max_length,\n    )\n    return enc"
+        },
+        {
+            "family": "Qwen3",
+            "size_b": 0.6,
+            "hf_repo": "Qwen/Qwen3-0.6B-Base",
+            "tokenizer": "AutoTokenizer",
+            "model_class": "AutoModelForCausalLM",
+            "trust_remote_code": true,
+            "eos_token_literal": "<|endoftext|>",
+            "load_snippet_py": "from transformers import AutoTokenizer, AutoModelForCausalLM\nimport torch\n\nmodel_id = \"Qwen/Qwen3-0.6B-Base\"\ntokenizer = AutoTokenizer.from_pretrained(model_id, trust_remote_code=True)\nmodel = AutoModelForCausalLM.from_pretrained(\n    model_id,\n    torch_dtype=torch.bfloat16 if torch.cuda.is_available() else torch.float32,\n    device_map=\"auto\" if torch.cuda.is_available() else None,\n    trust_remote_code=True,\n)\nmodel.eval()",
+            "prepare_text_file_snippet_py": "from transformers import AutoTokenizer\nimport torch\n\ndef prepare_text_file(path, model_id=\"Qwen/Qwen3-0.6B-Base\", max_length=1024, add_eos=True):\n    tokenizer = AutoTokenizer.from_pretrained(model_id, trust_remote_code=True)\n    with open(path, \"r\", encoding=\"utf-8\") as f:\n        text = f.read()\n\n    if add_eos and tokenizer.eos_token is not None:\n        eos = tokenizer.eos_token\n        if not text.rstrip().endswith(eos):\n            text = text.rstrip() + \"<|endoftext|>\"\n\n    enc = tokenizer(\n        text,\n        return_tensors=\"pt\",\n        truncation=True,\n        max_length=max_length,\n    )\n    return enc"
+        },
+        {
+            "family": "GPT-2",
+            "size_b": 0.774,
+            "hf_repo": "openai-community/gpt2-large",
+            "tokenizer": "AutoTokenizer",
+            "model_class": "AutoModelForCausalLM",
+            "trust_remote_code": false,
+            "eos_token_literal": "<|endoftext|>",
+            "load_snippet_py": "from transformers import AutoTokenizer, AutoModelForCausalLM\nimport torch\n\nmodel_id = \"openai-community/gpt2-large\"\ntokenizer = AutoTokenizer.from_pretrained(model_id, trust_remote_code=False)\nmodel = AutoModelForCausalLM.from_pretrained(\n    model_id,\n    torch_dtype=torch.bfloat16 if torch.cuda.is_available() else torch.float32,\n    device_map=\"auto\" if torch.cuda.is_available() else None,\n    trust_remote_code=False,\n)\nmodel.eval()",
+            "prepare_text_file_snippet_py": "from transformers import AutoTokenizer\nimport torch\n\ndef prepare_text_file(path, model_id=\"openai-community/gpt2-large\", max_length=1024, add_eos=True):\n    tokenizer = AutoTokenizer.from_pretrained(model_id, trust_remote_code=False)\n    with open(path, \"r\", encoding=\"utf-8\") as f:\n        text = f.read()\n\n    if add_eos and tokenizer.eos_token is not None:\n        eos = tokenizer.eos_token\n        if not text.rstrip().endswith(eos):\n            text = text.rstrip() + \"<|endoftext|>\"\n\n    enc = tokenizer(\n        text,\n        return_tensors=\"pt\",\n        truncation=True,\n        max_length=max_length,\n    )\n    return enc"
+        },
+        {
+            "family": "Pythia",
+            "size_b": 1.0,
+            "hf_repo": "EleutherAI/pythia-1b",
+            "tokenizer": "AutoTokenizer",
+            "model_class": "AutoModelForCausalLM",
+            "trust_remote_code": false,
+            "eos_token_literal": "<|endoftext|>",
+            "load_snippet_py": "from transformers import AutoTokenizer, AutoModelForCausalLM\nimport torch\n\nmodel_id = \"EleutherAI/pythia-1b\"\ntokenizer = AutoTokenizer.from_pretrained(model_id, trust_remote_code=False)\nmodel = AutoModelForCausalLM.from_pretrained(\n    model_id,\n    torch_dtype=torch.bfloat16 if torch.cuda.is_available() else torch.float32,\n    device_map=\"auto\" if torch.cuda.is_available() else None,\n    trust_remote_code=False,\n)\nmodel.eval()",
+            "prepare_text_file_snippet_py": "from transformers import AutoTokenizer\nimport torch\n\ndef prepare_text_file(path, model_id=\"EleutherAI/pythia-1b\", max_length=1024, add_eos=True):\n    tokenizer = AutoTokenizer.from_pretrained(model_id, trust_remote_code=False)\n    with open(path, \"r\", encoding=\"utf-8\") as f:\n        text = f.read()\n\n    if add_eos and tokenizer.eos_token is not None:\n        eos = tokenizer.eos_token\n        if not text.rstrip().endswith(eos):\n            text = text.rstrip() + \"<|endoftext|>\"\n\n    enc = tokenizer(\n        text,\n        return_tensors=\"pt\",\n        truncation=True,\n        max_length=max_length,\n    )\n    return enc"
+        },
+        {
+            "family": "Falcon-3",
+            "size_b": 1.0,
+            "hf_repo": "tiiuae/Falcon3-1B-Base",
+            "tokenizer": "AutoTokenizer",
+            "model_class": "AutoModelForCausalLM",
+            "trust_remote_code": true,
+            "eos_token_literal": "<|endoftext|>",
+            "load_snippet_py": "from transformers import AutoTokenizer, AutoModelForCausalLM\nimport torch\n\nmodel_id = \"tiiuae/Falcon3-1B-Base\"\ntokenizer = AutoTokenizer.from_pretrained(model_id, trust_remote_code=True)\nmodel = AutoModelForCausalLM.from_pretrained(\n    model_id,\n    torch_dtype=torch.bfloat16 if torch.cuda.is_available() else torch.float32,\n    device_map=\"auto\" if torch.cuda.is_available() else None,\n    trust_remote_code=True,\n)\nmodel.eval()",
+            "prepare_text_file_snippet_py": "from transformers import AutoTokenizer\nimport torch\n\ndef prepare_text_file(path, model_id=\"tiiuae/Falcon3-1B-Base\", max_length=1024, add_eos=True):\n    tokenizer = AutoTokenizer.from_pretrained(model_id, trust_remote_code=True)\n    with open(path, \"r\", encoding=\"utf-8\") as f:\n        text = f.read()\n\n    if add_eos and tokenizer.eos_token is not None:\n        eos = tokenizer.eos_token\n        if not text.rstrip().endswith(eos):\n            text = text.rstrip() + \"<|endoftext|>\"\n\n    enc = tokenizer(\n        text,\n        return_tensors=\"pt\",\n        truncation=True,\n        max_length=max_length,\n    )\n    return enc"
+        },
+        {
+            "family": "Phi-1.5",
+            "size_b": 1.3,
+            "hf_repo": "microsoft/phi-1_5",
+            "tokenizer": "AutoTokenizer",
+            "model_class": "AutoModelForCausalLM",
+            "trust_remote_code": false,
+            "eos_token_literal": "<|endoftext|>",
+            "load_snippet_py": "from transformers import AutoTokenizer, AutoModelForCausalLM\nimport torch\n\nmodel_id = \"microsoft/phi-1_5\"\ntokenizer = AutoTokenizer.from_pretrained(model_id, trust_remote_code=False)\nmodel = AutoModelForCausalLM.from_pretrained(\n    model_id,\n    torch_dtype=torch.bfloat16 if torch.cuda.is_available() else torch.float32,\n    device_map=\"auto\" if torch.cuda.is_available() else None,\n    trust_remote_code=False,\n)\nmodel.eval()",
+            "prepare_text_file_snippet_py": "from transformers import AutoTokenizer\nimport torch\n\ndef prepare_text_file(path, model_id=\"microsoft/phi-1_5\", max_length=1024, add_eos=True):\n    tokenizer = AutoTokenizer.from_pretrained(model_id, trust_remote_code=False)\n    with open(path, \"r\", encoding=\"utf-8\") as f:\n        text = f.read()\n\n    if add_eos and tokenizer.eos_token is not None:\n        eos = tokenizer.eos_token\n        if not text.rstrip().endswith(eos):\n            text = text.rstrip() + \"<|endoftext|>\"\n\n    enc = tokenizer(\n        text,\n        return_tensors=\"pt\",\n        truncation=True,\n        max_length=max_length,\n    )\n    return enc"
+        },
+        {
+            "family": "Pythia",
+            "size_b": 1.4,
+            "hf_repo": "EleutherAI/pythia-1.4b",
+            "tokenizer": "AutoTokenizer",
+            "model_class": "AutoModelForCausalLM",
+            "trust_remote_code": false,
+            "eos_token_literal": "<|endoftext|>",
+            "load_snippet_py": "from transformers import AutoTokenizer, AutoModelForCausalLM\nimport torch\n\nmodel_id = \"EleutherAI/pythia-1.4b\"\ntokenizer = AutoTokenizer.from_pretrained(model_id, trust_remote_code=False)\nmodel = AutoModelForCausalLM.from_pretrained(\n    model_id,\n    torch_dtype=torch.bfloat16 if torch.cuda.is_available() else torch.float32,\n    device_map=\"auto\" if torch.cuda.is_available() else None,\n    trust_remote_code=False,\n)\nmodel.eval()",
+            "prepare_text_file_snippet_py": "from transformers import AutoTokenizer\nimport torch\n\ndef prepare_text_file(path, model_id=\"EleutherAI/pythia-1.4b\", max_length=1024, add_eos=True):\n    tokenizer = AutoTokenizer.from_pretrained(model_id, trust_remote_code=False)\n    with open(path, \"r\", encoding=\"utf-8\") as f:\n        text = f.read()\n\n    if add_eos and tokenizer.eos_token is not None:\n        eos = tokenizer.eos_token\n        if not text.rstrip().endswith(eos):\n            text = text.rstrip() + \"<|endoftext|>\"\n\n    enc = tokenizer(\n        text,\n        return_tensors=\"pt\",\n        truncation=True,\n        max_length=max_length,\n    )\n    return enc"
+        },
+        {
+            "family": "GPT-2",
+            "size_b": 1.5,
+            "hf_repo": "openai-community/gpt2-xl",
+            "tokenizer": "AutoTokenizer",
+            "model_class": "AutoModelForCausalLM",
+            "trust_remote_code": false,
+            "eos_token_literal": "<|endoftext|>",
+            "load_snippet_py": "from transformers import AutoTokenizer, AutoModelForCausalLM\nimport torch\n\nmodel_id = \"openai-community/gpt2-xl\"\ntokenizer = AutoTokenizer.from_pretrained(model_id, trust_remote_code=False)\nmodel = AutoModelForCausalLM.from_pretrained(\n    model_id,\n    torch_dtype=torch.bfloat16 if torch.cuda.is_available() else torch.float32,\n    device_map=\"auto\" if torch.cuda.is_available() else None,\n    trust_remote_code=False,\n)\nmodel.eval()",
+            "prepare_text_file_snippet_py": "from transformers import AutoTokenizer\nimport torch\n\ndef prepare_text_file(path, model_id=\"openai-community/gpt2-xl\", max_length=1024, add_eos=True):\n    tokenizer = AutoTokenizer.from_pretrained(model_id, trust_remote_code=False)\n    with open(path, \"r\", encoding=\"utf-8\") as f:\n        text = f.read()\n\n    if add_eos and tokenizer.eos_token is not None:\n        eos = tokenizer.eos_token\n        if not text.rstrip().endswith(eos):\n            text = text.rstrip() + \"<|endoftext|>\"\n\n    enc = tokenizer(\n        text,\n        return_tensors=\"pt\",\n        truncation=True,\n        max_length=max_length,\n    )\n    return enc"
+        },
+        {
+            "family": "Qwen2.5",
+            "size_b": 1.5,
+            "hf_repo": "Qwen/Qwen2.5-1.5B",
+            "tokenizer": "AutoTokenizer",
+            "model_class": "AutoModelForCausalLM",
+            "trust_remote_code": true,
+            "eos_token_literal": "<|endoftext|>",
+            "load_snippet_py": "from transformers import AutoTokenizer, AutoModelForCausalLM\nimport torch\n\nmodel_id = \"Qwen/Qwen2.5-1.5B\"\ntokenizer = AutoTokenizer.from_pretrained(model_id, trust_remote_code=True)\nmodel = AutoModelForCausalLM.from_pretrained(\n    model_id,\n    torch_dtype=torch.bfloat16 if torch.cuda.is_available() else torch.float32,\n    device_map=\"auto\" if torch.cuda.is_available() else None,\n    trust_remote_code=True,\n)\nmodel.eval()",
+            "prepare_text_file_snippet_py": "from transformers import AutoTokenizer\nimport torch\n\ndef prepare_text_file(path, model_id=\"Qwen/Qwen2.5-1.5B\", max_length=1024, add_eos=True):\n    tokenizer = AutoTokenizer.from_pretrained(model_id, trust_remote_code=True)\n    with open(path, \"r\", encoding=\"utf-8\") as f:\n        text = f.read()\n\n    if add_eos and tokenizer.eos_token is not None:\n        eos = tokenizer.eos_token\n        if not text.rstrip().endswith(eos):\n            text = text.rstrip() + \"<|endoftext|>\"\n\n    enc = tokenizer(\n        text,\n        return_tensors=\"pt\",\n        truncation=True,\n        max_length=max_length,\n    )\n    return enc"
+        },
+        {
+            "family": "Falcon-H1",
+            "size_b": 1.5,
+            "hf_repo": "tiiuae/Falcon-H1-1.5B-Base",
+            "tokenizer": "AutoTokenizer",
+            "model_class": "AutoModelForCausalLM",
+            "trust_remote_code": true,
+            "eos_token_literal": "<|endoftext|>",
+            "load_snippet_py": "from transformers import AutoTokenizer, AutoModelForCausalLM\nimport torch\n\nmodel_id = \"tiiuae/Falcon-H1-1.5B-Base\"\ntokenizer = AutoTokenizer.from_pretrained(model_id, trust_remote_code=True)\nmodel = AutoModelForCausalLM.from_pretrained(\n    model_id,\n    torch_dtype=torch.bfloat16 if torch.cuda.is_available() else torch.float32,\n    device_map=\"auto\" if torch.cuda.is_available() else None,\n    trust_remote_code=True,\n)\nmodel.eval()",
+            "prepare_text_file_snippet_py": "from transformers import AutoTokenizer\nimport torch\n\ndef prepare_text_file(path, model_id=\"tiiuae/Falcon-H1-1.5B-Base\", max_length=1024, add_eos=True):\n    tokenizer = AutoTokenizer.from_pretrained(model_id, trust_remote_code=True)\n    with open(path, \"r\", encoding=\"utf-8\") as f:\n        text = f.read()\n\n    if add_eos and tokenizer.eos_token is not None:\n        eos = tokenizer.eos_token\n        if not text.rstrip().endswith(eos):\n            text = text.rstrip() + \"<|endoftext|>\"\n\n    enc = tokenizer(\n        text,\n        return_tensors=\"pt\",\n        truncation=True,\n        max_length=max_length,\n    )\n    return enc"
+        },
+        {
+            "family": "SmolLM",
+            "size_b": 1.7,
+            "hf_repo": "HuggingFaceTB/SmolLM-1.7B",
+            "tokenizer": "AutoTokenizer",
+            "model_class": "AutoModelForCausalLM",
+            "trust_remote_code": false,
+            "eos_token_literal": "<|endoftext|>",
+            "load_snippet_py": "from transformers import AutoTokenizer, AutoModelForCausalLM\nimport torch\n\nmodel_id = \"HuggingFaceTB/SmolLM-1.7B\"\ntokenizer = AutoTokenizer.from_pretrained(model_id, trust_remote_code=False)\nmodel = AutoModelForCausalLM.from_pretrained(\n    model_id,\n    torch_dtype=torch.bfloat16 if torch.cuda.is_available() else torch.float32,\n    device_map=\"auto\" if torch.cuda.is_available() else None,\n    trust_remote_code=False,\n)\nmodel.eval()",
+            "prepare_text_file_snippet_py": "from transformers import AutoTokenizer\nimport torch\n\ndef prepare_text_file(path, model_id=\"HuggingFaceTB/SmolLM-1.7B\", max_length=1024, add_eos=True):\n    tokenizer = AutoTokenizer.from_pretrained(model_id, trust_remote_code=False)\n    with open(path, \"r\", encoding=\"utf-8\") as f:\n        text = f.read()\n\n    if add_eos and tokenizer.eos_token is not None:\n        eos = tokenizer.eos_token\n        if not text.rstrip().endswith(eos):\n            text = text.rstrip() + \"<|endoftext|>\"\n\n    enc = tokenizer(\n        text,\n        return_tensors=\"pt\",\n        truncation=True,\n        max_length=max_length,\n    )\n    return enc"
+        },
+        {
+            "family": "Qwen3",
+            "size_b": 1.7,
+            "hf_repo": "Qwen/Qwen3-1.7B-Base",
+            "tokenizer": "AutoTokenizer",
+            "model_class": "AutoModelForCausalLM",
+            "trust_remote_code": true,
+            "eos_token_literal": "<|endoftext|>",
+            "load_snippet_py": "from transformers import AutoTokenizer, AutoModelForCausalLM\nimport torch\n\nmodel_id = \"Qwen/Qwen3-1.7B-Base\"\ntokenizer = AutoTokenizer.from_pretrained(model_id, trust_remote_code=True)\nmodel = AutoModelForCausalLM.from_pretrained(\n    model_id,\n    torch_dtype=torch.bfloat16 if torch.cuda.is_available() else torch.float32,\n    device_map=\"auto\" if torch.cuda.is_available() else None,\n    trust_remote_code=True,\n)\nmodel.eval()",
+            "prepare_text_file_snippet_py": "from transformers import AutoTokenizer\nimport torch\n\ndef prepare_text_file(path, model_id=\"Qwen/Qwen3-1.7B-Base\", max_length=1024, add_eos=True):\n    tokenizer = AutoTokenizer.from_pretrained(model_id, trust_remote_code=True)\n    with open(path, \"r\", encoding=\"utf-8\") as f:\n        text = f.read()\n\n    if add_eos and tokenizer.eos_token is not None:\n        eos = tokenizer.eos_token\n        if not text.rstrip().endswith(eos):\n            text = text.rstrip() + \"<|endoftext|>\"\n\n    enc = tokenizer(\n        text,\n        return_tensors=\"pt\",\n        truncation=True,\n        max_length=max_length,\n    )\n    return enc"
+        },
+        {
+            "family": "Pythia",
+            "size_b": 2.8,
+            "hf_repo": "EleutherAI/pythia-2.8b",
+            "tokenizer": "AutoTokenizer",
+            "model_class": "AutoModelForCausalLM",
+            "trust_remote_code": false,
+            "eos_token_literal": "<|endoftext|>",
+            "load_snippet_py": "from transformers import AutoTokenizer, AutoModelForCausalLM\nimport torch\n\nmodel_id = \"EleutherAI/pythia-2.8b\"\ntokenizer = AutoTokenizer.from_pretrained(model_id, trust_remote_code=False)\nmodel = AutoModelForCausalLM.from_pretrained(\n    model_id,\n    torch_dtype=torch.bfloat16 if torch.cuda.is_available() else torch.float32,\n    device_map=\"auto\" if torch.cuda.is_available() else None,\n    trust_remote_code=False,\n)\nmodel.eval()",
+            "prepare_text_file_snippet_py": "from transformers import AutoTokenizer\nimport torch\n\ndef prepare_text_file(path, model_id=\"EleutherAI/pythia-2.8b\", max_length=1024, add_eos=True):\n    tokenizer = AutoTokenizer.from_pretrained(model_id, trust_remote_code=False)\n    with open(path, \"r\", encoding=\"utf-8\") as f:\n        text = f.read()\n\n    if add_eos and tokenizer.eos_token is not None:\n        eos = tokenizer.eos_token\n        if not text.rstrip().endswith(eos):\n            text = text.rstrip() + \"<|endoftext|>\"\n\n    enc = tokenizer(\n        text,\n        return_tensors=\"pt\",\n        truncation=True,\n        max_length=max_length,\n    )\n    return enc",
+            "notes": ">2B; optional."
+        }
+    ]
+}
