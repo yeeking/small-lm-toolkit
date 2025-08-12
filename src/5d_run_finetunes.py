@@ -115,16 +115,23 @@ class WindowTextDataset(Dataset):
         )
         return tuple(enc["input_ids"]), tuple(enc["attention_mask"])
 
+
+
     def __getitem__(self, idx: int) -> Dict[str, torch.Tensor]:
         text = self.windows[idx]
         input_ids_tup, attn_mask_tup = self._cached_encode(text, self.block_size)
         input_ids = torch.tensor(input_ids_tup, dtype=torch.long)
         attention_mask = torch.tensor(attn_mask_tup, dtype=torch.long)
-        return {
-            "input_ids": input_ids,
-            "attention_mask": attention_mask,
-            "labels": input_ids.clone(),  # standard causal LM loss
-        }
+
+        labels = input_ids.clone()
+        labels[attention_mask == 0] = -100   # ignore pad in CE loss
+        return {"input_ids": input_ids, "attention_mask": attention_mask, "labels": labels}
+
+        # return {
+        #     "input_ids": input_ids,
+        #     "attention_mask": attention_mask,
+        #     "labels": input_ids.clone(),  # standard causal LM loss
+        # }
 
 # TrainIterableDataset: change ctor signature
 class TrainIterableDataset(IterableDataset):
@@ -447,6 +454,17 @@ def suggested_num_workers(cap: int | None = None) -> int:
         n = min(n, cap)
     return n
 
+def get_model_max_len(model, tokenizer, default_cap: int = 4096) -> int:
+    # collect candidate caps from config/tokenizer, ignore "very large" sentinel values
+    cands = []
+    for attr in ("n_positions", "max_position_embeddings", "seq_length", "max_seq_len"):
+        v = getattr(model.config, attr, None)
+        if isinstance(v, int) and v > 0:
+            cands.append(v)
+    tm = getattr(tokenizer, "model_max_length", None)
+    if isinstance(tm, int) and 0 < tm < 10**9:
+        cands.append(tm)
+    return min(cands) if cands else default_cap
 
 # --------------------
 # Training runner with OOM fallback
@@ -470,6 +488,12 @@ def run_for_model(model_cfg: Dict[str, Any], args: argparse.Namespace, global_ou
     tokenizer = AutoTokenizer.from_pretrained(hf_repo, use_fast=True, trust_remote_code=trust_remote_code)
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token or tokenizer.cls_token
+   
+    tokenizer.truncation_side = "left"     # keep the tail
+    tokenizer.padding_side = "right"       # usual default
+
+
+
     LOG.info(f"Loading model: {hf_repo} (size {size_b})")
     try:
         model = AutoModelForCausalLM.from_pretrained(hf_repo, trust_remote_code=trust_remote_code)
@@ -491,16 +515,22 @@ def run_for_model(model_cfg: Dict[str, Any], args: argparse.Namespace, global_ou
     # num_workers = max(1, (os.cpu_count() or 2) - 1)
     num_workers = suggested_num_workers()   # e.g., becomes 1 if SLURM grants 2 CPUs
     pin_memory = (accelerator == "gpu")  # pin memory is meaningful for CUDA
+    
+    safe_model_ctx = get_model_max_len(model, tokenizer)
+    # Clamp your block_size so you never exceed the model’s context
+    effective_block_size = min(args.block_size, safe_model_ctx)
+
     datamodule = SimpleDataModule(
         data_dir=Path(args.data_dir),
         tokenizer=tokenizer,
-        block_size=args.block_size,
+        block_size=effective_block_size,   # <-- use the clamped value
         context=args.context,
         batch_size=args.batch_size,
         num_workers=num_workers,
         pin_memory=pin_memory,
         val_sample_count=3,
     )
+ 
 
     lit_module = CausalLMModule(
         model=model,
@@ -554,8 +584,9 @@ def run_for_model(model_cfg: Dict[str, Any], args: argparse.Namespace, global_ou
             LOG.warning(f"Batch-size tuning failed on this device: {e}. Will continue with OOM backoff.")
             # datamodule.batch_size = int(datamodule.batch_size / 4)
             # maybe  
-            if torch.backends.mps.is_available():
-                datamodule.batch_size = int(datamodule.batch_size / 4)
+     
+    if torch.backends.mps.is_available():# always scale to 0.25 as  mps seems over-keen on over allocation
+        datamodule.batch_size = int(datamodule.batch_size / 4)
             
     LOG.info(f"Chose batch size {datamodule.batch_size}")
 
