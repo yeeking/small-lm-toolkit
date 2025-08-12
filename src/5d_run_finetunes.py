@@ -622,6 +622,7 @@ def load_and_validate_config(config_path: Path) -> Dict[str, Any]:
 def parse_args():
     p = argparse.ArgumentParser(description="Finetune/evaluate small LMs with Lightning 2.x.")
     p.add_argument("--config", type=str, required=True, help="Path to JSON config with models list.")
+    p.add_argument("--model", type=str, required=False, default=None, help="only run one model with this HF model name - needs to be in the JSON file")  
     p.add_argument("--data_dir", type=str, required=True, help="Data directory with training/ and validation/")
     p.add_argument("--out_dir", type=str, default="./runs", help="Output root directory")
     p.add_argument("--epochs", type=int, default=3)
@@ -629,7 +630,7 @@ def parse_args():
     # p.add_argument("--auto_scale_bs", action="store_true", help="Use Lightning Tuner to auto-scale batch size")
     p.add_argument("--accumulate_grad_batches", type=int, default=1)
     p.add_argument("--block_size", type=int, default=512, help="Max tokens per example")
-    p.add_argument("--context", type=int, default=3, help="Number of previous lines as context")
+    p.add_argument("--context", type=int, default=64, help="Number of previous lines as context. in NJAM, that's number of notes")
     p.add_argument("--lr", type=float, default=2e-5)
     p.add_argument("--weight_decay", type=float, default=0.01)
     p.add_argument("--warmup_ratio", type=float, default=0.05)
@@ -680,8 +681,13 @@ def main():
     # Seeding (Lightning 2.x)
     seed_everything(args.seed, workers=True)
 
+    if args.model is not None:
+        cfg["models"] = [mdl for mdl in cfg["models"] if mdl["hf_repo"] == args.model]
+        assert len(cfg["models"]) > 0, f"Could not find hf model {args.model} in config"
     # Train/evaluate each model
+
     for m in cfg["models"]:
+            
         LOG.info(f"=== Model: {m['hf_repo']} (size {m['size_b']}) ===")
         # try:
         run_for_model(m, args, out_root)
