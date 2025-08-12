@@ -680,6 +680,9 @@ def run_for_model(model_cfg: Dict[str, Any], args: argparse.Namespace, global_ou
      
     if torch.backends.mps.is_available():# always scale to 0.25 as  mps seems over-keen on over allocation
         datamodule.batch_size = int(datamodule.batch_size / 4)
+    if torch.cuda.is_available():
+        datamodule.batch_size = int(datamodule.batch_size / 2)
+    if datamodule.batch_size == 0: datamodule.batch_size = 1
             
     LOG.info(f"Chose batch size {datamodule.batch_size}")
 
