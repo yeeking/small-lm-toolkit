@@ -4,16 +4,18 @@ import json
 import argparse
 import random
 from pathlib import Path
-from typing import List, Tuple, Dict, Any
+from typing import List, Tuple, Dict, Any, Optional
 from collections import OrderedDict
 
 import torch
 from torch.utils.data import Dataset, DataLoader
 from transformers import AutoTokenizer, AutoModelForCausalLM, get_linear_schedule_with_warmup
+import numpy as np
 
 import pytorch_lightning as pl
 from pytorch_lightning.loggers import TensorBoardLogger
-from pytorch_lightning.callbacks import ModelCheckpoint, LearningRateMonitor
+from pytorch_lightning.callbacks import ModelCheckpoint, LearningRateMonitor, EarlyStopping
+from pytorch_lightning.callbacks.progress.rich_progress import RichProgressBar
 
 # --------------------
 # Defaults
@@ -260,7 +262,26 @@ class HFCLMModule(pl.LightningModule):
     def validation_step(self, batch, batch_idx):
         out = self(**batch)
         val_loss = out.loss
+        
+        # Calculate perplexity
+        perplexity = torch.exp(val_loss)
+        
         self.log("val/loss", val_loss, prog_bar=True, on_step=False, on_epoch=True)
+        self.log("val/perplexity", perplexity, prog_bar=True, on_step=False, on_epoch=True)
+        
+        # Log example predictions periodically
+        if batch_idx == 0:  # First batch of each epoch
+            input_text = self.tokenizer.decode(batch["input_ids"][0])
+            pred_logits = out.logits[0]
+            pred_ids = torch.argmax(pred_logits, dim=-1)
+            pred_text = self.tokenizer.decode(pred_ids)
+            
+            self.logger.experiment.add_text(
+                "val/example_prediction",
+                f"Input:\n{input_text}\n\nPrediction:\n{pred_text}",
+                self.current_epoch
+            )
+        
         return val_loss
 
     def configure_optimizers(self):
@@ -286,24 +307,57 @@ def safe_run_name(repo: str) -> str:
 
 def run_one_model(
     repo: str,
-    parm_count, 
+    param_count: str, 
     trust_remote_code: bool,
     train_files: List[Path],
     val_files: List[Path],
     args,
 ):
-    run_name = safe_run_name(f"{repo}_{parm_count}")
+    run_name = safe_run_name(f"{repo}_{param_count}")
     logger = TensorBoardLogger(save_dir=args.log_dir, name=run_name)
-    ckpt_cb = ModelCheckpoint(
-        dirpath=Path(args.out_dir) / run_name,
-        filename="{epoch:02d}-{step:06d}-{val_loss:.3f}",
-        save_top_k=1,
-        monitor="val/loss",
-        mode="min",
-        save_last=True,
-        auto_insert_metric_name=False,
+    
+    # Initialize callbacks with just the essential ones
+    callbacks = [
+        ModelCheckpoint(
+            dirpath=Path(args.out_dir) / run_name,
+            filename="{epoch:02d}-{step:06d}-{val_loss:.3f}",
+            save_top_k=1,
+            monitor="val/loss",
+            mode="min",
+            save_last=True,
+            auto_insert_metric_name=False,
+        ),
+        LearningRateMonitor(logging_interval="step"),
+        EarlyStopping(
+            monitor="val/loss",
+            patience=args.early_stopping_patience,
+            mode="min",
+            min_delta=args.early_stopping_delta
+        )
+    ]
+
+    # Auto-select precision based on device
+    if torch.cuda.is_available():
+        precision = "16-mixed"
+    elif torch.backends.mps.is_available():
+        precision = "32-true"
+    else:
+        precision = "32-true"
+
+    trainer = pl.Trainer(
+        accelerator="auto",
+        devices="auto",
+        precision=precision,
+        max_epochs=args.max_epochs,
+        accumulate_grad_batches=args.grad_accum,
+        log_every_n_steps=10,
+        gradient_clip_val=1.0,
+        enable_checkpointing=True,
+        logger=logger,
+        callbacks=callbacks,
+        enable_progress_bar=True,
+        num_sanity_val_steps=-1,  # Run validation on full val set before training
     )
-    lrmon = LearningRateMonitor(logging_interval="step")
 
     # Module first to get its tokenizer for the DataModule
     module = HFCLMModule(
@@ -327,27 +381,16 @@ def run_one_model(
         train_shuffle_files=True,
     )
 
-    # Build trainer with finite epochs → bounded progress bars
-    trainer = pl.Trainer(
-        accelerator="mps" if torch.backends.mps.is_available() else "cpu",
-        devices="auto",
-        precision="32-true",  # MPS doesn't support bf16
-        max_epochs=args.max_epochs,
-        accumulate_grad_batches=args.grad_accum,
-        log_every_n_steps=10,
-        gradient_clip_val=1.0,
-        enable_checkpointing=True,
-        logger=logger,
-        callbacks=[ckpt_cb, lrmon],
-        # sanity val is fine now; you can set num_sanity_val_steps=0 to skip
-    )
+    # Add auto batch size tuning if requested
+    if hasattr(args, 'auto_batch_size') and args.auto_batch_size:
+        trainer.tune(module, datamodule=dm)  # This will find optimal batch size
 
     trainer.fit(module, datamodule=dm)
     print(f"[OK] Finished Lightning run for {repo}. Logs: {logger.log_dir}  Checkpoints: {ckpt_cb.dirpath}")
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Finite-epoch Lightning finetune for multiple HF models")
+    parser = argparse.ArgumentParser(description="Enhanced Lightning finetune for multiple HF models")
     parser.add_argument("--data_dir", type=str, required=True, help="Folder containing 'training' and 'validation' subfolders")
     parser.add_argument("--json", type=str, default=JSON_PATH, help="Path to models_plan.json")
     parser.add_argument("--batch_size", type=int, default=BATCH_SIZE)
@@ -362,6 +405,17 @@ def main():
     parser.add_argument("--no_bf16", action="store_true", help="Disable bf16 mixed precision on CUDA")
     parser.add_argument("--no_grad_ckpt", action="store_true", help="Disable gradient checkpointing")
     parser.add_argument("--token_cache_budget", type=int, default=TOKEN_CACHE_BUDGET, help="Approx token budget for in-memory file token cache")
+    
+    # Add new arguments
+    parser.add_argument("--context_size", type=int, default=3,
+                       help="Number of previous sentences to use as context")
+    parser.add_argument("--auto_batch_size", action="store_true",
+                       help="Automatically find the largest batch size that fits in memory")
+    parser.add_argument("--early_stopping_patience", type=int, default=3,
+                       help="Number of epochs to wait for improvement before early stopping")
+    parser.add_argument("--early_stopping_delta", type=float, default=0.01,
+                       help="Minimum change in validation loss to qualify as an improvement")
+    
     args = parser.parse_args()
 
     # Sanity
@@ -395,7 +449,73 @@ def main():
         trust_remote_code = bool(entry.get("trust_remote_code", False))
         print(f"\n=== Lightning run: {repo} ===")
         run_one_model(repo, size_b, trust_remote_code, train_files, val_files, args)
+        break 
 
 
 if __name__ == "__main__":
     main()
+
+
+class SentenceWindowDataset(Dataset):
+    """Dataset that maintains sentence boundaries and creates context windows"""
+    def __init__(
+        self,
+        files: List[Path],
+        tokenizer: AutoTokenizer,
+        max_length: int,
+        context_size: int = 3,
+        cache_token_budget: int = TOKEN_CACHE_BUDGET
+    ):
+        super().__init__()
+        self.tokenizer = tokenizer
+        self.max_length = max_length
+        self.context_size = context_size
+        self.cache = LRUTokenCache(cache_token_budget)
+        
+        # Load and preprocess all files
+        self.sentence_boundaries: List[Tuple[int, int, Path]] = []  # (file_idx, sent_idx, filepath)
+        self.files = files
+        
+        for file_idx, fp in enumerate(files):
+            try:
+                with open(fp, "r", encoding="utf-8") as f:
+                    text = f.read().strip()
+                    sentences = [s.strip() for s in text.split("\n") if s.strip()]
+                    
+                    for sent_idx in range(len(sentences)):
+                        self.sentence_boundaries.append((file_idx, sent_idx, fp))
+            except Exception as e:
+                print(f"Warning: Skipping file {fp}: {e}")
+                continue
+    
+    def __len__(self) -> int:
+        return len(self.sentence_boundaries)
+    
+    def _get_sentences(self, file_path: Path) -> List[str]:
+        with open(file_path, "r", encoding="utf-8") as f:
+            return [s.strip() for s in f.read().split("\n") if s.strip()]
+    
+    def __getitem__(self, idx: int) -> Dict[str, torch.Tensor]:
+        file_idx, sent_idx, fp = self.sentence_boundaries[idx]
+        sentences = self._get_sentences(fp)
+        
+        # Get context window
+        start_idx = max(0, sent_idx - self.context_size)
+        context = sentences[start_idx:sent_idx]
+        target = sentences[sent_idx]
+        
+        # Tokenize
+        inputs = self.tokenizer(
+            " ".join(context),
+            target,
+            max_length=self.max_length,
+            truncation=True,
+            padding="max_length",
+            return_tensors="pt"
+        )
+        
+        return {
+            "input_ids": inputs["input_ids"][0],
+            "attention_mask": inputs["attention_mask"][0],
+            "labels": inputs["input_ids"][0].clone()
+        }
