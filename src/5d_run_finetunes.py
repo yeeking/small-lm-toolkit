@@ -50,6 +50,7 @@ from lightning.pytorch.loggers import TensorBoardLogger
 from lightning.pytorch.callbacks import ModelCheckpoint, LearningRateMonitor, EarlyStopping
 from lightning.pytorch.tuner.tuning import Tuner
 
+from huggingface_hub import snapshot_download
 
 from transformers import (
     AutoTokenizer,
@@ -479,11 +480,21 @@ def get_model_max_len(model, tokenizer, default_cap: int = 4096) -> int:
         cands.append(tm)
     return min(cands) if cands else default_cap
 
-import os
-from transformers import AutoTokenizer, AutoModelForCausalLM
-from huggingface_hub import snapshot_download
 
-def load_model(
+def load_model_no_cache(hf_repo, size_b, trust_remote_code):
+    LOG.info(f"Loading tokenizer: {hf_repo}")
+    tokenizer = AutoTokenizer.from_pretrained(hf_repo, use_fast=True, trust_remote_code=trust_remote_code)
+
+    LOG.info(f"Loading model: {hf_repo} (size {size_b})")
+    try:
+        model = AutoModelForCausalLM.from_pretrained(hf_repo, trust_remote_code=trust_remote_code)
+    except Exception as e:
+        LOG.error(f"Failed to load model {hf_repo}: {e}")
+        return None, None
+    
+    return tokenizer, model
+
+def load_model_cache(
     hf_repo: str,
     trust_remote_code: bool = False,
     use_fast: bool = True,
@@ -541,6 +552,7 @@ def load_model(
         return tokenizer, model
 
 
+
 # --------------------
 # Training runner with OOM fallback
 # --------------------
@@ -561,14 +573,19 @@ def run_for_model(model_cfg: Dict[str, Any], args: argparse.Namespace, global_ou
     # Tokenizer & model
 
     LOG.info(f"Loading tokenizer & model for '{hf_repo}' from cache...")
-    tokenizer, model = load_model(
-        hf_repo,
-        trust_remote_code=trust_remote_code,
-        model_kwargs={
-            "torch_dtype": (torch.bfloat16 if torch.cuda.is_available() else torch.float32),
-            "device_map": "auto" if torch.cuda.is_available() else None
-        }
-    )
+    # tokenizer, model = load_model_cache(
+    #     hf_repo,
+    #     trust_remote_code=trust_remote_code,
+    #     model_kwargs={
+    #         "torch_dtype": (torch.bfloat16 if torch.cuda.is_available() else torch.float32),
+    #         "device_map": "auto" if torch.cuda.is_available() else None
+    #     }
+    # )
+    tokenizer, model = load_model_no_cache(hf_repo, size_b, trust_remote_code)
+    assert tokenizer is not None, f"Tokenizer did not load correctly."
+    assert model is not None, f"Mode did not load correctly."
+    
+
 
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token or tokenizer.cls_token
