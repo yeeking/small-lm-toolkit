@@ -5,7 +5,7 @@ import shlex
 
 data_folder = './data'
 json_file = os.path.join(data_folder, 'models_plan_sorted.json')
-pycmd = f"python {os.path.join(data_folder, '../src', '5d_run_finetunes.py')}"
+pycmd = f"python {os.path.join(data_folder, '../src', '5_run_finetunes.py')}"
 pycmd += f" --config {json_file} --data_dir {os.path.join(data_folder, 'tiny_dataset')}"
 pycmd += f" --epochs 1 --auto_scale_bs --model "
 
