@@ -297,27 +297,59 @@ def select_accel_precision_devices():
         return "mps", "32-true", 1
     # LOG.info("Falling back to CPU (32-bit precision).")
     return "cpu", "32-true", 1
+import tempfile
 
 def autoscale_batch_size_mps_safe(lit_module, datamodule, accelerator, devices, precision):
-    tune_trainer = Trainer(
-        accelerator=accelerator,
-        devices=devices,
-        precision=precision,
-        num_sanity_val_steps=0,
-        max_epochs=1,
-        limit_train_batches=2,
-        limit_val_batches=0,
-        enable_checkpointing=False,
-        logger=False,
-    )
-    tuner = Tuner(tune_trainer)
-    new_bs = tuner.scale_batch_size(
-        lit_module, datamodule=datamodule, mode="power", steps_per_trial=1,
-        init_val=max(1, datamodule.batch_size // 2), max_trials=6, batch_arg_name="batch_size",
-    )
-    if getattr(torch.backends, "mps", None) and torch.backends.mps.is_available():
-        torch.mps.empty_cache()
+    """figures out an ideal batch size 
+        works in a temporary directory so ckpts that get generated are automatically deleted afterwards
+    """
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tune_trainer = Trainer(
+            accelerator=accelerator,
+            devices=devices,
+            precision=precision,
+            default_root_dir=tmpdir,   # <— temp sandbox for .scale_batch_size*.ckpt
+            num_sanity_val_steps=0,
+            max_epochs=1,
+            limit_train_batches=2,
+            limit_val_batches=0,
+            enable_checkpointing=False,
+            logger=False,
+            # optionally: barebones=True  # trims more features; not required
+        )
+        tuner = Tuner(tune_trainer)
+        new_bs = tuner.scale_batch_size(
+            lit_module,
+            datamodule=datamodule,
+            mode="power",
+            steps_per_trial=1,
+            init_val=max(1, datamodule.batch_size // 2),
+            max_trials=6,
+            batch_arg_name="batch_size",
+        )
+    # tmpdir (and the .ckpt inside) is removed here
     return new_bs
+
+# def autoscale_batch_size_mps_safe(lit_module, datamodule, accelerator, devices, precision):
+#     tune_trainer = Trainer(
+#         accelerator=accelerator,
+#         devices=devices,
+#         precision=precision,
+#         num_sanity_val_steps=0,
+#         max_epochs=1,
+#         limit_train_batches=2,
+#         limit_val_batches=0,
+#         enable_checkpointing=False,
+#         logger=False,
+#     )
+#     tuner = Tuner(tune_trainer)
+#     new_bs = tuner.scale_batch_size(
+#         lit_module, datamodule=datamodule, mode="power", steps_per_trial=1,
+#         init_val=max(1, datamodule.batch_size // 2), max_trials=6, batch_arg_name="batch_size",
+#     )
+#     if getattr(torch.backends, "mps", None) and torch.backends.mps.is_available():
+#         torch.mps.empty_cache()
+#     return new_bs
 
 def load_model_no_cache(hf_repo, size_b, trust_remote_code):
     # LOG.info(f"Loading tokenizer: {hf_repo}")
