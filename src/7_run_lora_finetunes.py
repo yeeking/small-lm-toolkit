@@ -123,7 +123,7 @@ class CausalLMWithLoRA(L.LightningModule):
             samples = []
             for i, prompt_text in enumerate(dm.val_preview_texts):
                 enc = self.tokenizer(
-                    prompt_text, return_tensors="pt", truncation=True, max_length=dm.block_size
+                    prompt_text, return_tensors="pt", truncation=True, max_length=dm.want_ctx_size
                 )
                 enc = {k: v.to(self.device) for k, v in enc.items()}
                 with torch.no_grad():
@@ -214,12 +214,12 @@ def run_for_model(model_cfg: Dict[str, Any], args: argparse.Namespace, global_ou
     num_workers = shared_utils.suggested_num_workers()
     pin_memory = False  # your note about leaked fds/persistent_workers
     safe_model_ctx = shared_utils.get_model_max_len(peft_model, tokenizer)
-    effective_block_size = min(args.block_size, safe_model_ctx)
+    available_ctx_size = min(args.want_ctx_size, safe_model_ctx)
 
     dm = shared_utils.SimpleDataModule(
         data_dir=Path(args.data_dir),
         tokenizer=tokenizer,
-        block_size=effective_block_size,
+        want_ctx_size=available_ctx_size,
         batch_size=args.batch_size,
         num_workers=num_workers,
         pin_memory=pin_memory,
@@ -334,7 +334,7 @@ def parse_args():
     p.add_argument("--epochs", type=int, default=3)
     p.add_argument("--batch_size", type=int, default=4)
     p.add_argument("--accumulate_grad_batches", type=int, default=1)
-    p.add_argument("--block_size", type=int, default=512)
+    p.add_argument("--want_ctx_size", type=int, default=512)
     # p.add_argument("--context", type=int, default=64)
     p.add_argument("--lr", type=float, default=2e-4)          # LoRA typical LR
     p.add_argument("--weight_decay", type=float, default=0.0) # adapters often 0
