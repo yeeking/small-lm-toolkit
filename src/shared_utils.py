@@ -541,7 +541,7 @@ class SimpleDataModule(L.LightningDataModule):
             pin_memory=self.pin_memory,
             drop_last=True,
             persistent_workers=self.num_workers > 0,
-            prefetch_factor=1,
+            # prefetch_factor=1,
         )
 
     def val_dataloader(self):
