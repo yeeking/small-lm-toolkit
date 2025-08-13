@@ -220,11 +220,12 @@ def run_for_model(model_cfg: Dict[str, Any], args: argparse.Namespace, global_ou
         data_dir=Path(args.data_dir),
         tokenizer=tokenizer,
         block_size=effective_block_size,
-        context=args.context,
         batch_size=args.batch_size,
         num_workers=num_workers,
         pin_memory=pin_memory,
-        val_sample_count=3,
+        val_sample_count=3, 
+        # could specify min and max lines of context here... defaults are ok though
+        
     )
 
     lit_module = CausalLMWithLoRA(
@@ -334,7 +335,7 @@ def parse_args():
     p.add_argument("--batch_size", type=int, default=4)
     p.add_argument("--accumulate_grad_batches", type=int, default=1)
     p.add_argument("--block_size", type=int, default=512)
-    p.add_argument("--context", type=int, default=64)
+    # p.add_argument("--context", type=int, default=64)
     p.add_argument("--lr", type=float, default=2e-4)          # LoRA typical LR
     p.add_argument("--weight_decay", type=float, default=0.0) # adapters often 0
     p.add_argument("--warmup_ratio", type=float, default=0.05)
