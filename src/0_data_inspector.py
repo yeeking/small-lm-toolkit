@@ -8,7 +8,7 @@ import shared_utils
 # ---- CONFIG ----
 # model_name_or_path = "gpt2"  # or your HF repo
 data_dir = Path("./data/tiny_dataset")  # adjust to match your dataset
-block_size = 64
+block_size = 512
 context = 4
 batch_size = 2
 num_workers = 0
