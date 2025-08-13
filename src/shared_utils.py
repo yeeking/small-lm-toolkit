@@ -584,7 +584,7 @@ class TrainIterableDatasetVarCtx(IterableDataset):
             while i < len(lines):
                 # Proposed context length from (cyclic) schedule
                 want_lines_in_ctx = schedule[sched_idx]
-                print(f"TrainIterableDatasetVarCtx: __iter__ want ctx lines {want_lines_in_ctx}")
+                # print(f"TrainIterableDatasetVarCtx: __iter__ want ctx lines {want_lines_in_ctx}")
                 # Advance schedule pointer for *this* attempt (we consume schedule each yielded sample)
                 sched_idx = (sched_idx + 1) % len(schedule)
 
@@ -603,7 +603,7 @@ class TrainIterableDatasetVarCtx(IterableDataset):
 
                 # Assemble window: ctx previous events + current event
                 text = "\n".join(lines[i - ctx : i] + [lines[i]])
-                print(f"TrainIterableDatasetVarCtx: __iter__ got ctx lines {len(text.split('\n'))}")
+                # print(f"TrainIterableDatasetVarCtx: __iter__ got ctx lines {len(text.split('\n'))}")
 
 
                 enc = tok(
