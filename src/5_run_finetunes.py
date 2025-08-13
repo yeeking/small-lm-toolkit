@@ -104,9 +104,11 @@ class CausalLMModule(L.LightningModule):
         out = self.model(**batch)
         val_loss = out.loss
         self.log("val_loss", val_loss, on_step=False, on_epoch=True, prog_bar=True, sync_dist=True)
+        # LOG.info(f"Validation step complete")
         return val_loss
 
     def on_train_start(self):
+        LOG.info(f"on_train_start training starting up")
         if isinstance(self.logger, TensorBoardLogger):
             tb = self.logger.experiment
             tb.add_scalar("model/num_parameters", float(self._param_count), self.global_step)
@@ -114,6 +116,8 @@ class CausalLMModule(L.LightningModule):
 
     def on_validation_epoch_end(self):
         # Perplexity from aggregated val_loss
+        LOG.info(f"Validation epoch ended - running additional evaluations")
+
         val_loss = self.trainer.callback_metrics.get("val_loss")
         if val_loss is not None:
             try:
@@ -126,7 +130,7 @@ class CausalLMModule(L.LightningModule):
 
         # Sample generations for a few validation prompts
         dm = self.trainer.datamodule
-        if not isinstance(dm, SimpleDataModule) or not dm.val_preview_texts:
+        if not isinstance(dm, shared_utils.SimpleDataModule) or not dm.val_preview_texts:
             return
         try:
             self.model.eval()
@@ -136,7 +140,7 @@ class CausalLMModule(L.LightningModule):
                     prompt_text,
                     return_tensors="pt",
                     truncation=True,
-                    max_length=dm.block_size,
+                    max_length=dm.want_ctx_size,
                 )
                 enc = {k: v.to(self.device) for k, v in enc.items()}
 
@@ -155,6 +159,8 @@ class CausalLMModule(L.LightningModule):
                 self.logger.experiment.add_text("samples", "\n".join(samples), self.global_step)
         except Exception as e:
             LOG.warning(f"Sample generation failed: {e}")
+        LOG.info(f"Validation epoch ended - additional evaluations complete")
+
 
     def configure_optimizers(self):
         optimizer = AdamW(self.parameters(), lr=self.lr, weight_decay=self.weight_decay)
@@ -230,17 +236,19 @@ def run_for_model(model_cfg: Dict[str, Any], args: argparse.Namespace, global_ou
     pin_memory = False # pinning memory causes leaky file handles so OS.too many files open
     
     safe_model_ctx = shared_utils.get_model_max_len(model, tokenizer)
-    # Clamp your block_size so you never exceed the model’s context
-    effective_block_size = min(args.block_size, safe_model_ctx)
+    # Clamp your available_ctx_size so you never exceed the model’s context
+    available_ctx_size = min(args.want_ctx_size, safe_model_ctx)
 
     datamodule = shared_utils.SimpleDataModule(
         data_dir=Path(args.data_dir),
         tokenizer=tokenizer,
-        block_size=effective_block_size,   # <-- use the clamped value
+        want_ctx_size=available_ctx_size,   # <-- use the clamped value
         batch_size=args.batch_size,
         num_workers=num_workers,
         pin_memory=pin_memory,
         val_sample_count=3,
+        min_lines_in_context=8, 
+        max_lines_in_context=16, 
         # can optionally specify the min and max lines of context here, aka 'previous notes'
     )
  
@@ -376,7 +384,7 @@ def parse_args():
     p.add_argument("--batch_size", type=int, default=4, help="Starting batch size (may be auto-scaled or reduced on OOM)")    
     # p.add_argument("--auto_scale_bs", action="store_true", help="Use Lightning Tuner to auto-scale batch size")
     p.add_argument("--accumulate_grad_batches", type=int, default=1)
-    p.add_argument("--block_size", type=int, default=512, help="Max tokens per example")
+    p.add_argument("--want_ctx_size", type=int, default=1024, help="Max tokens per example")
     # p.add_argument("--context", type=int, default=64, help="Number of previous lines as context. in NJAM, that's number of notes")
     p.add_argument("--lr", type=float, default=2e-5)
     p.add_argument("--weight_decay", type=float, default=0.01)
