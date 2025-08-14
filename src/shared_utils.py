@@ -3,7 +3,8 @@
 from pathlib import Path
 import os 
 import json 
-from typing import List, Dict, Any, Tuple, Iterable
+from typing import List, Dict, Any, Tuple, Iterable, Optional
+# from typing import Iterable, List, Optional, Dict, Any
 import random 
 import math
 
@@ -253,6 +254,7 @@ def do_test_infer(llamacpp_model, prompt="Which is better, macos or linux", max_
 # Files & text utils
 # --------------------
 def find_text_files(root: Path) -> List[Path]:
+    # assert type(root) == Path, f"find_text_files expects a Path not a {type(root)}"
     files = []
     for ext in TEXT_EXTS:
         files.extend(root.rglob(f"*{ext}"))
@@ -273,6 +275,13 @@ def safe_read_lines(path: Path) -> List[str]:
     except Exception as e:
         # LOG.warning(f"Failed to read {path}: {e}")
         return []
+
+def powers_of_two(min_ctx: int, max_ctx: int):
+    k0 = math.ceil(math.log2(max(1, min_ctx)))
+    k1 = math.floor(math.log2(max(1, max_ctx)))
+    return [1 << k for k in range(k0, k1 + 1)]
+
+
 
 def build_windows_from_lines(lines: List[str], context: int) -> List[str]:
     if context <= 0:
@@ -432,6 +441,102 @@ def wrap_with_lora(model, args):
     return peft_model
 
 
+
+
+class MiddleP2WindowDataset(Dataset):
+    """
+    Validation dataset builder:
+      For each file:
+        - read lines
+        - n = len(lines)//2 (middle index)
+        - create windows starting at n with lengths in powers-of-two from min_p2 to max_p2
+          (e.g., 4, 8, 16, ..., 256), but only those that fit within the file
+        - join with '\n' and append to dataset
+
+    If tokenizer is provided, returns a dict with input_ids/attention_mask/labels;
+    otherwise returns the raw concatenated string.
+
+    Args:
+        files: iterable of file paths (str or Path)
+        min_p2: smallest power-of-two window length (inclusive), e.g., 4
+        max_p2: largest power-of-two window length (inclusive), e.g., 256
+        tokenizer: optional HF tokenizer
+        block_size: max token length if tokenizing
+        pad_to_block: if True, pad to block_size (default True when tokenizing)
+    """
+    def __init__(
+        self,
+        files: Iterable[str | Path],
+        min_p2: int = 4,
+        max_p2: int = 256,
+        tokenizer=None,
+        block_size: Optional[int] = None,
+        pad_to_block: bool = True,
+    ):
+        super().__init__()
+        self.files = [Path(p) for p in files]
+        self.min_p2 = int(min_p2)
+        self.max_p2 = int(max_p2)
+        self.tokenizer = tokenizer
+        self.block_size = block_size
+        self.pad_to_block = pad_to_block if tokenizer is not None else False
+
+        if self.min_p2 < 1 or self.max_p2 < self.min_p2:
+            raise ValueError("Invalid min/max powers-of-two range.")
+
+        self._lengths = powers_of_two(self.min_p2, self.max_p2)
+        if not self._lengths:
+            raise ValueError("No powers-of-two in the requested range.")
+
+        # Precompute samples deterministically
+        self.samples: List[str] = []
+        for fp in self.files:
+            lines = safe_read_lines(fp)
+            if not lines:
+                continue
+            n = len(lines) // 2  # middle index
+            for L in self._lengths:
+                end = n + L
+                if end <= len(lines):
+                    text = "\n".join(lines[n:end])
+                    self.samples.append(text)
+                # if it doesn't fit, skip; we only want windows starting at middle
+
+    def __len__(self) -> int:
+        return len(self.samples)
+
+    def _tokenize(self, text: str) -> Dict[str, Any]:
+        if self.tokenizer is None:
+            return {"text": text}
+
+        enc = self.tokenizer(
+            text,
+            truncation=True if self.block_size is not None else False,
+            max_length=self.block_size,
+            padding=("max_length" if (self.block_size and self.pad_to_block) else False),
+            return_tensors="pt",
+        )
+        # Flatten to 1D tensors
+        input_ids = enc["input_ids"].squeeze(0)
+        attention_mask = enc["attention_mask"].squeeze(0)
+
+        # Standard causal LM labels = input_ids with pads masked to -100
+        labels = input_ids.clone()
+        if "attention_mask" in enc:
+            labels = labels.masked_fill(attention_mask == 0, -100)
+
+        return {
+            "input_ids": input_ids.long(),
+            "attention_mask": attention_mask.long(),
+            "labels": labels.long(),
+        }
+
+    def __getitem__(self, idx: int):
+        text = self.samples[idx]
+        if self.tokenizer is None:
+            return text
+        return self._tokenize(text)
+
 # --------------------
 # Dataset
 # --------------------
@@ -525,31 +630,40 @@ class TrainIterableDataset(IterableDataset):
 
 
 
+def make_lm_collate(tokenizer, want_ctx_size: int, pad_to_max: bool = False):
+    """
+    Batch-tokenise a list of strings. Builds labels = input_ids with pads masked to -100.
+    pad_to_max=False => pad to longest in batch (faster, less padding).
+    """
+    def collate(batch_texts):
+        enc = tokenizer(
+            batch_texts,
+            padding=("max_length" if pad_to_max else "longest"),
+            truncation=True,
+            max_length=want_ctx_size,
+            return_tensors="pt",
+        )
+        input_ids = enc["input_ids"]
+        attn = enc["attention_mask"]
+        labels = input_ids.clone()
+        labels[attn == 0] = -100
+        return {"input_ids": input_ids, "attention_mask": attn, "labels": labels}
+    return collate
+
 
 class TrainIterableDatasetVarCtx(IterableDataset):
     """
-    IterableDataset that cycles through powers-of-two context sizes (in *events/lines*)
-    between min_context_events and max_context_events (inclusive), e.g.:
-    [16, 32, 64, 128, 256, 512].
+    Cycles through powers-of-two context sizes (in lines/events) between
+    min_lines_in_context and max_lines_in_context (inclusive), e.g. [16,32,64,...].
 
-    Each yielded item is built with the *next* context size from that schedule (cyclic).
-    Very-short inputs are avoided by enforcing a minimum context length.
-
-    Args:
-        files: iterable of file paths
-        tok_name_or_path: HF tokenizer name/path
-        tok_kwargs: kwargs for tokenizer
-        want_ctx_size: max tokenized length (tokens)
-        max_context_events: maximum number of lines to include as context
-        min_context_events: minimum number of lines to include as context (floor)
-        shuffle_files: shuffle file order
+    Yields raw '\n'-joined strings. Tokenisation is handled by the DataLoader's collate_fn.
     """
     def __init__(
         self,
         files: Iterable[str | Path],
-        tok_name_or_path: str,
+        tok_name_or_path: str,   # kept so you can still seed/tokeniser-config in workers if needed
         tok_kwargs: dict,
-        want_ctx_size: int,
+        want_ctx_size: int,      # token max length (used by collate_fn)
         max_lines_in_context: int,
         min_lines_in_context: int = 16,
         shuffle_files: bool = True,
@@ -562,9 +676,7 @@ class TrainIterableDatasetVarCtx(IterableDataset):
         self.max_lines_in_context = int(max_lines_in_context)
         self.min_lines_in_context = int(min_lines_in_context)
         self.shuffle_files = shuffle_files
-        self._tok = None
 
-        # Build powers-of-two schedule within [min, max]
         self._context_schedule = self._build_context_schedule(
             self.min_lines_in_context, self.max_lines_in_context
         )
@@ -576,20 +688,13 @@ class TrainIterableDatasetVarCtx(IterableDataset):
     def _build_context_schedule(self, min_ctx: int, max_ctx: int) -> List[int]:
         if min_ctx > max_ctx:
             min_ctx, max_ctx = max_ctx, min_ctx
-        # start at the smallest power-of-two >= min_ctx
-        k_start = math.ceil(math.log2(max(1, min_ctx)))
-        k_end   = math.floor(math.log2(max(1, max_ctx)))
-        schedule = [1 << k for k in range(k_start, k_end + 1)]
-        # Ensure we respect the floor even if min_ctx is not a power of two
-        schedule = [s for s in schedule if s >= min_ctx and s <= max_ctx]
-        return schedule
+        k0 = math.ceil(math.log2(max(1, min_ctx)))
+        k1 = math.floor(math.log2(max(1, max_ctx)))
+        return [1 << k for k in range(k0, k1 + 1) if (1 << k) >= min_ctx and (1 << k) <= max_ctx]
 
-    def _tokenizer(self):
-        if self._tok is None:
-            self._tok = AutoTokenizer.from_pretrained(self.tok_name_or_path, **self.tok_kwargs)
-            if self._tok.pad_token is None:
-                self._tok.pad_token = self._tok.eos_token or self._tok.cls_token
-        return self._tok
+    @staticmethod
+    def _floor_pow2(n: int) -> int:
+        return (1 << (n.bit_length() - 1)) if n >= 1 else 0
 
     def __iter__(self):
         rng = random.Random(torch.initial_seed() % (2**32))
@@ -600,57 +705,28 @@ class TrainIterableDatasetVarCtx(IterableDataset):
         if self.shuffle_files:
             rng.shuffle(file_iter)
 
-        # Each worker picks a different starting index in the schedule to reduce correlation
-        schedule = list(self._context_schedule)
+        schedule = self._context_schedule
         sched_idx = rng.randrange(len(schedule))
-
-        tok = self._tokenizer()
 
         for p in file_iter:
             lines = safe_read_lines(Path(p))
             if not lines:
                 continue
 
-            # We start at the smallest valid index so we can always take at least min_context_events
+            n_lines = len(lines)
             i = self.min_lines_in_context
-            while i < len(lines):
-                # Proposed context length from (cyclic) schedule
-                want_lines_in_ctx = schedule[sched_idx]
-                # print(f"TrainIterableDatasetVarCtx: __iter__ want ctx lines {want_lines_in_ctx}")
-                # Advance schedule pointer for *this* attempt (we consume schedule each yielded sample)
+            while i < n_lines:
+                want_ctx = schedule[sched_idx]
                 sched_idx = (sched_idx + 1) % len(schedule)
 
-                # We need a context <= i (so we have enough previous lines).
-                # If proposed_ctx is too big for early positions, use the largest schedule element <= i.
-                if want_lines_in_ctx > i:
-                    # pick the largest size <= i (and >= min)
-                    feasible = [s for s in schedule if s <= i]
-                    if not feasible:
-                        # Not enough lines yet to form any window; move forward
-                        i += 1
-                        continue
-                    ctx = feasible[-1]
-                else:
-                    ctx = want_lines_in_ctx
+                ctx_cap = self._floor_pow2(i)
+                if ctx_cap == 0:
+                    i += 1
+                    continue
+                ctx = want_ctx if want_ctx <= ctx_cap else ctx_cap
 
-                # Assemble window: ctx previous events + current event
                 text = "\n".join(lines[i - ctx : i] + [lines[i]])
-                # print(f"TrainIterableDatasetVarCtx: __iter__ got ctx lines {len(text.split('\n'))}")
-
-
-                enc = tok(
-                    text,
-                    truncation=True,
-                    max_length=self.want_ctx_size,
-                    padding="max_length",
-                )
-                yield {
-                    "input_ids": torch.tensor(enc["input_ids"], dtype=torch.long),
-                    "attention_mask": torch.tensor(enc["attention_mask"], dtype=torch.long),
-                    "labels": torch.tensor(enc["input_ids"], dtype=torch.long),
-                }
-
-                # Move to next position
+                yield text
                 i += 1
 
 
@@ -718,7 +794,7 @@ class SimpleDataModule(L.LightningDataModule):
 
         self._train_files: list[Path] | None = None
         self._train_ds = None
-        self._val_ds: WindowTextDataset | None = None
+        self._val_ds: MiddleP2WindowDataset | None = None
         self.val_preview_texts: list[str] = []
 
         # now sanity check the requested context max and min
@@ -745,10 +821,10 @@ class SimpleDataModule(L.LightningDataModule):
         assert train_root.exists(), f"Training directory not found: {train_root}"
         assert val_root.exists(),   f"Validation directory not found: {val_root}"
 
-        def powers_of_two(min_ctx: int, max_ctx: int):
-            k0 = math.ceil(math.log2(max(1, min_ctx)))
-            k1 = math.floor(math.log2(max(1, max_ctx)))
-            return [1 << k for k in range(k0, k1 + 1)]
+        # def powers_of_two(min_ctx: int, max_ctx: int):
+        #     k0 = math.ceil(math.log2(max(1, min_ctx)))
+        #     k1 = math.floor(math.log2(max(1, max_ctx)))
+        #     return [1 << k for k in range(k0, k1 + 1)]
         
 
         ## some notes on the validation dataset
@@ -759,28 +835,10 @@ class SimpleDataModule(L.LightningDataModule):
                 val_files = find_text_files(val_root)
                 assert len(val_files) > 0, "No validation files found"
 
-                ctx_sizes = powers_of_two(self.min_lines_in_context, self.max_lines_in_context)
-                print(f"SimpleDataModule: val set CTX sizes {ctx_sizes}. Prepping validation data points")
+                # Use the middlep2window dataset which is designed for validation datasets
+                self._val_ds = MiddleP2WindowDataset(val_files, block_size=self.want_ctx_size, tokenizer=self.tokenizer,  min_p2=self.min_lines_in_context, 
+                                                     max_p2=self.max_lines_in_context)
 
-                all_windows: list[str] = []
-                for p in val_files:
-                    lines = safe_read_lines(p)
-                    # print(f"{p} has {len(lines)} lines ")
-                    if not lines:
-                        continue
-                    for ctx in ctx_sizes:
-                        # print(f"Getting a context with {ctx} lines")
-                        file_windows = build_windows_from_lines(lines, ctx)
-                        # Optional: downsample to keep val compact
-                        if len(file_windows) > 2048:
-                            file_windows = file_windows[:2048]
-                        all_windows.extend(file_windows)
-                # print(f"Window lengths: {[len(w) for w in all_windows]}")
-                assert all_windows, "Validation files contained no usable text"
-                self.val_preview_texts = all_windows[: self.val_sample_count]
-
-                self._val_ds = WindowTextDataset(all_windows, self.tokenizer, self.want_ctx_size)
-                print(f"SimpleDataModule: validation set loaded: found {len(all_windows)} examples")
 
         if stage in (None, "fit"):
             if self._train_files is None:
@@ -792,43 +850,38 @@ class SimpleDataModule(L.LightningDataModule):
                 self.setup(stage="validate")
 
 
-        # if stage in (None, "fit"):
-        #     if self._train_files is None:
-        #         train_files = find_text_files(train_root)
-        #         assert len(train_files) > 0, "No training files found"
-        #         self._train_files = train_files
-        #         # LOG.info(f"Train files: {len(self._train_files)}")
-        #     if self._val_ds is None:
-        #         self.setup(stage="validate")
-
     def train_dataloader(self):
         if self._train_files is None:
             self.setup(stage="fit")
- 
-        # use the magic 'variable length context' dataset class 
-        self._train_ds = TrainIterableDatasetVarCtx(
+
+        ds = TrainIterableDatasetVarCtx(
             files=self._train_files,
             tok_name_or_path=self.tokenizer.name_or_path,
             tok_kwargs={
                 "use_fast": True,
                 "trust_remote_code": getattr(self.tokenizer, "init_kwargs", {}).get("trust_remote_code", False),
             },
-            want_ctx_size=self.want_ctx_size,
-            max_lines_in_context=self.max_lines_in_context,   # max lines of context to feed, where in njam, one line is one musical event
-            min_lines_in_context=self.min_lines_in_context,   # min lines
+            want_ctx_size=self.want_ctx_size,          # or whatever you pass in today
+            max_lines_in_context=self.max_lines_in_context,
+            min_lines_in_context=self.min_lines_in_context,
             shuffle_files=True,
         )
 
+        # Ensure tokenizer padding/truncation sides are set once
+        if self.tokenizer.pad_token is None:
+            self.tokenizer.pad_token = self.tokenizer.eos_token or self.tokenizer.cls_token
+        self.tokenizer.truncation_side = "left"
+        self.tokenizer.padding_side = "right"
 
         return DataLoader(
-            self._train_ds,
+            ds,
             batch_size=self.batch_size,
             num_workers=self.num_workers,
             pin_memory=self.pin_memory,
             drop_last=True,
             persistent_workers=self.num_workers > 0,
-            # prefetch_factor=1,
-        )
+            collate_fn=make_lm_collate(self.tokenizer, want_ctx_size=self.want_ctx_size, pad_to_max=False),
+    )
 
     def val_dataloader(self):
         if self._val_ds is None:
