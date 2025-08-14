@@ -1,5 +1,8 @@
 {
   "models": [
+{
+google/gemma-3-270m
+}
     {
       "family": "GPT-2",
       "size_b": 0.124,
