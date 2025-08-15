@@ -3,11 +3,13 @@ import os
 import subprocess
 import shlex
 
-data_folder = './data'
-data_folder = '../../src/small-lm-toolkit/data'
-json_file = os.path.join(data_folder, 'models_plan_sorted.json')
-pycmd = f"python {os.path.join(data_folder, '../src', '5_run_finetunes.py')}"
-pycmd += f" --config {json_file} --data_dir {os.path.join(data_folder, 'tiny_dataset')}"
+data_folder = './data/small-lm-pijama/'
+json_file = './data/models_plan.json'
+src_folder = "./src/"
+# data_folder = '../../src/small-lm-toolkit/data'
+# json_file = os.path.join(data_folder, 'models_plan_sorted.json')
+pycmd = f"python {os.path.join(src_folder, '5_run_finetunes.py')}"
+pycmd += f" --config {json_file} --data_dir {data_folder})}"
 pycmd += f" --epochs 1 --auto_scale_bs --model "
 
 with open(json_file) as f:
