@@ -214,6 +214,8 @@ def run_for_model(model_cfg: Dict[str, Any], args: argparse.Namespace, global_ou
     num_workers = shared_utils.suggested_num_workers()
     pin_memory = False  # your note about leaked fds/persistent_workers
     safe_model_ctx = shared_utils.get_model_max_len(peft_model, tokenizer)
+    LOG.info(f"Model context length is  maxing out at {safe_model_ctx} - you asked for {args.want_ctx_size}")
+
     available_ctx_size = min(args.want_ctx_size, safe_model_ctx)
 
     dm = shared_utils.SimpleDataModule(
@@ -223,7 +225,8 @@ def run_for_model(model_cfg: Dict[str, Any], args: argparse.Namespace, global_ou
         batch_size=args.batch_size,
         num_workers=num_workers,
         pin_memory=pin_memory,
-        val_sample_count=3, 
+        min_lines_in_context=8, 
+        max_lines_in_context=64
         # could specify min and max lines of context here... defaults are ok though
         
     )
@@ -334,7 +337,7 @@ def parse_args():
     p.add_argument("--epochs", type=int, default=3)
     p.add_argument("--batch_size", type=int, default=4)
     p.add_argument("--accumulate_grad_batches", type=int, default=1)
-    p.add_argument("--want_ctx_size", type=int, default=512)
+    p.add_argument("--want_ctx_size", type=int, default=2048)
     # p.add_argument("--context", type=int, default=64)
     p.add_argument("--lr", type=float, default=2e-4)          # LoRA typical LR
     p.add_argument("--weight_decay", type=float, default=0.0) # adapters often 0

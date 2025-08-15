@@ -236,6 +236,7 @@ def run_for_model(model_cfg: Dict[str, Any], args: argparse.Namespace, global_ou
     pin_memory = False # pinning memory causes leaky file handles so OS.too many files open
     
     safe_model_ctx = shared_utils.get_model_max_len(model, tokenizer)
+    LOG.info(f"Model context length is  maxing out at {safe_model_ctx} - you asked for {args.want_ctx_size}")
     # Clamp your available_ctx_size so you never exceed the model’s context
     available_ctx_size = min(args.want_ctx_size, safe_model_ctx)
 
@@ -246,9 +247,8 @@ def run_for_model(model_cfg: Dict[str, Any], args: argparse.Namespace, global_ou
         batch_size=args.batch_size,
         num_workers=num_workers,
         pin_memory=pin_memory,
-        val_sample_count=3,
         min_lines_in_context=8, 
-        max_lines_in_context=16, 
+        max_lines_in_context=64, 
         # can optionally specify the min and max lines of context here, aka 'previous notes'
     )
  
@@ -384,7 +384,7 @@ def parse_args():
     p.add_argument("--batch_size", type=int, default=4, help="Starting batch size (may be auto-scaled or reduced on OOM)")    
     # p.add_argument("--auto_scale_bs", action="store_true", help="Use Lightning Tuner to auto-scale batch size")
     p.add_argument("--accumulate_grad_batches", type=int, default=1)
-    p.add_argument("--want_ctx_size", type=int, default=1024, help="Max tokens per example")
+    p.add_argument("--want_ctx_size", type=int, default=2048, help="Max tokens per example")
     # p.add_argument("--context", type=int, default=64, help="Number of previous lines as context. in NJAM, that's number of notes")
     p.add_argument("--lr", type=float, default=2e-5)
     p.add_argument("--weight_decay", type=float, default=0.01)
