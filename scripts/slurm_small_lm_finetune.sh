@@ -6,5 +6,5 @@
 #SBATCH --nodelist ben  # bill be broke for now
 #SBATCH  -o small-lm-finetune-test.log      # write output to log file
 
-srun   -l  python ./src/small-lm-toolkit/src/6_run_finetunes_separate.py
+srun   -l  python ./src/6_run_finetunes_separate.py
 
