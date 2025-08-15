@@ -253,6 +253,12 @@ def do_test_infer(llamacpp_model, prompt="Which is better, macos or linux", max_
 # --------------------
 # Files & text utils
 # --------------------
+def find_files(root: Path, ext) -> List[Path]:
+    # assert type(root) == Path, f"find_text_files expects a Path not a {type(root)}"
+    files = []
+    files.extend(root.rglob(f"*{ext}"))
+    return sorted(files)
+
 def find_text_files(root: Path) -> List[Path]:
     # assert type(root) == Path, f"find_text_files expects a Path not a {type(root)}"
     files = []
