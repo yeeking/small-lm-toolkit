@@ -21,8 +21,8 @@ def get_base_name(filepath):
 def main():
     # folder = "/Users/matthewyk/src/ai-music/data/midi/"
     # out_folder = "/Users/matthewyk/src/ai-music/data/10_piano_solos/"
-    folder = "/Users/matthewyk/src/ai-music/data/small-lm-datasets/midi_hawthorne_all_keys/njam/"
-    out_folder = "/Users/matthewyk/src/ai-music/data/validation_dataset/"
+    folder = "/Users/matthewyk/src/ai-music/data/small-lm-datasets/training/"
+    out_folder = "/Users/matthewyk/src/ai-music/data/small-lm-datasets/validation/"
     assert os.path.exists(folder)
     assert os.path.exists(out_folder)
 
@@ -61,6 +61,8 @@ def main():
             dst_path = os.path.join(out_folder, os.path.basename(src_path))
             shutil.copy2(src_path, dst_path)
             print(f"Copied {src_path} ({os.path.getsize(src_path)} bytes) to {dst_path}")
+
+            os.remove(src_path)
             f.write(str(src_path) + "\n")
 
 if __name__ == "__main__":

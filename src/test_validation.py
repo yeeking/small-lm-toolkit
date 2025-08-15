@@ -3,7 +3,7 @@ from pathlib import Path
 
 
 # files = shared_utils.find_text_files(Path('data/tiny_dataset/training/'))
-files = shared_utils.find_text_files(Path('data/example_datafiles/'))
+files = shared_utils.find_text_files(Path('/Users/matthewyk/src/ai-music/data/small-lm-datasets/midi_hawthorne_all_keys/validation'))
 print(f"Retrieved {len(files)} files.")
 
 # files = ["val/file1.txt",     "val/file2.txt"]
