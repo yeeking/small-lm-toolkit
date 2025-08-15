@@ -1,6 +1,17 @@
 {
   "models": [
     {
+      "family": "gemma-3",
+      "size_b": 0.270,
+      "hf_repo": "google/gemma-3-270m",
+      "tokenizer": "AutoTokenizer",
+      "model_class": "AutoModelForCausalLM",
+      "trust_remote_code": false,
+      "eos_token_literal": "<|endoftext|>",
+      "load_snippet_py": "from transformers import AutoTokenizer, AutoModelForCausalLM\nimport torch\n\nmodel_id = \"openai-community/gpt2\"\ntokenizer = AutoTokenizer.from_pretrained(model_id, trust_remote_code=False)\nmodel = AutoModelForCausalLM.from_pretrained(\n    model_id,\n    torch_dtype=torch.bfloat16 if torch.cuda.is_available() else torch.float32,\n    device_map=\"auto\" if torch.cuda.is_available() else None,\n    trust_remote_code=False,\n)\nmodel.eval()",
+      "prepare_text_file_snippet_py": "from transformers import AutoTokenizer\nimport torch\n\ndef prepare_text_file(path, model_id=\"openai-community/gpt2\", max_length=1024, add_eos=True):\n    tokenizer = AutoTokenizer.from_pretrained(model_id, trust_remote_code=False)\n    with open(path, \"r\", encoding=\"utf-8\") as f:\n        text = f.read()\n\n    if add_eos and tokenizer.eos_token is not None:\n        eos = tokenizer.eos_token\n        if not text.rstrip().endswith(eos):\n            text = text.rstrip() + \"<|endoftext|>\"\n\n    enc = tokenizer(\n        text,\n        return_tensors=\"pt\",\n        truncation=True,\n        max_length=max_length,\n    )\n    return enc"
+    },
+    {
       "family": "GPT-2",
       "size_b": 0.124,
       "hf_repo": "openai-community/gpt2",
