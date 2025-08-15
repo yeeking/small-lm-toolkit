@@ -57,6 +57,7 @@ def get_model_max_len(model, tokenizer, default_cap: int = 4096) -> int:
     tm = getattr(tokenizer, "model_max_length", None)
     if isinstance(tm, int) and 0 < tm < 10**9:
         cands.append(tm)
+    # print(f"get_model_max_len got candidates {cands}")
     return min(cands) if cands else default_cap
 
 def suggested_num_workers(cap: int | None = None) -> int:
@@ -569,69 +570,69 @@ class WindowTextDataset(Dataset):
         labels[attention_mask == 0] = -100
         return {"input_ids": input_ids, "attention_mask": attention_mask, "labels": labels}
 
-class TrainIterableDataset(IterableDataset):
-    """
-    An IterableDataset for training language models on windowed text data.
+# class TrainIterableDataset(IterableDataset):
+#     """
+#     An IterableDataset for training language models on windowed text data.
 
-    Args:
-        files (Iterable[str or Path]): List of file paths containing text data.
-        tok_name_or_path (str): Name or path of the tokenizer to use.
-        tok_kwargs (dict): Additional keyword arguments for tokenizer initialization.
-        want_ctx_size (int): Maximum sequence length for tokenization.
-        context (int): Number of previous lines to include as context for each window.
-        shuffle_files (bool, optional): Whether to shuffle the file order for each epoch. Defaults to True.
+#     Args:
+#         files (Iterable[str or Path]): List of file paths containing text data.
+#         tok_name_or_path (str): Name or path of the tokenizer to use.
+#         tok_kwargs (dict): Additional keyword arguments for tokenizer initialization.
+#         want_ctx_size (int): Maximum sequence length for tokenization.
+#         context (int): Number of previous lines to include as context for each window.
+#         shuffle_files (bool, optional): Whether to shuffle the file order for each epoch. Defaults to True.
 
-    Yields:
-        dict: A dictionary containing:
-            - "input_ids" (torch.LongTensor): Token IDs for the input sequence.
-            - "attention_mask" (torch.LongTensor): Attention mask for the input sequence.
-            - "labels" (torch.LongTensor): Token IDs used as labels for training.
+#     Yields:
+#         dict: A dictionary containing:
+#             - "input_ids" (torch.LongTensor): Token IDs for the input sequence.
+#             - "attention_mask" (torch.LongTensor): Attention mask for the input sequence.
+#             - "labels" (torch.LongTensor): Token IDs used as labels for training.
 
-    Notes:
-        - Each yielded sample consists of `context` previous lines and the current line, joined together.
-        - Tokenization is performed with truncation and padding to `want_ctx_size`.
-        - Supports multi-worker data loading via PyTorch DataLoader.
-    """
-    """"""
-    def __init__(self, files, tok_name_or_path: str, tok_kwargs: dict,
-                 want_ctx_size: int, context: int, shuffle_files: bool = True):
-        super().__init__()
-        self.files = list(files)
-        self.tok_name_or_path = tok_name_or_path
-        self.tok_kwargs = tok_kwargs
-        self.want_ctx_size = want_ctx_size
-        self.context = context
-        self.shuffle_files = shuffle_files
-        self._tok = None
+#     Notes:
+#         - Each yielded sample consists of `context` previous lines and the current line, joined together.
+#         - Tokenization is performed with truncation and padding to `want_ctx_size`.
+#         - Supports multi-worker data loading via PyTorch DataLoader.
+#     """
+#     """"""
+#     def __init__(self, files, tok_name_or_path: str, tok_kwargs: dict,
+#                  want_ctx_size: int, context: int, shuffle_files: bool = True):
+#         super().__init__()
+#         self.files = list(files)
+#         self.tok_name_or_path = tok_name_or_path
+#         self.tok_kwargs = tok_kwargs
+#         self.want_ctx_size = want_ctx_size
+#         self.context = context
+#         self.shuffle_files = shuffle_files
+#         self._tok = None
 
-    def _tokenizer(self):
-        if self._tok is None:
-            self._tok = AutoTokenizer.from_pretrained(self.tok_name_or_path, **self.tok_kwargs)
-            if self._tok.pad_token is None:
-                self._tok.pad_token = self._tok.eos_token or self._tok.cls_token
-        return self._tok
+#     def _tokenizer(self):
+#         if self._tok is None:
+#             self._tok = AutoTokenizer.from_pretrained(self.tok_name_or_path, **self.tok_kwargs)
+#             if self._tok.pad_token is None:
+#                 self._tok.pad_token = self._tok.eos_token or self._tok.cls_token
+#         return self._tok
 
-    def _yield_windows_from_file(self, path: Path):
-        lines = safe_read_lines(path)
-        for i in range(self.context, len(lines)):
-            yield "\n".join(lines[i-self.context:i] + [lines[i]])
+#     def _yield_windows_from_file(self, path: Path):
+#         lines = safe_read_lines(path)
+#         for i in range(self.context, len(lines)):
+#             yield "\n".join(lines[i-self.context:i] + [lines[i]])
 
-    def __iter__(self):
-        rng = random.Random(torch.initial_seed() % (2**32))
-        worker = get_worker_info()
-        file_iter = self.files if worker is None else self.files[worker.id :: worker.num_workers]
-        file_iter = list(file_iter)
-        if self.shuffle_files:
-            rng.shuffle(file_iter)
-        tok = self._tokenizer()
-        for p in file_iter:
-            for text in self._yield_windows_from_file(p):
-                enc = tok(text, truncation=True, max_length=self.want_ctx_size, padding="max_length")
-                yield {
-                    "input_ids": torch.tensor(enc["input_ids"], dtype=torch.long),
-                    "attention_mask": torch.tensor(enc["attention_mask"], dtype=torch.long),
-                    "labels": torch.tensor(enc["input_ids"], dtype=torch.long),
-                }
+#     def __iter__(self):
+#         rng = random.Random(torch.initial_seed() % (2**32))
+#         worker = get_worker_info()
+#         file_iter = self.files if worker is None else self.files[worker.id :: worker.num_workers]
+#         file_iter = list(file_iter)
+#         if self.shuffle_files:
+#             rng.shuffle(file_iter)
+#         tok = self._tokenizer()
+#         for p in file_iter:
+#             for text in self._yield_windows_from_file(p):
+#                 enc = tok(text, truncation=True, max_length=self.want_ctx_size, padding="max_length")
+#                 yield {
+#                     "input_ids": torch.tensor(enc["input_ids"], dtype=torch.long),
+#                     "attention_mask": torch.tensor(enc["attention_mask"], dtype=torch.long),
+#                     "labels": torch.tensor(enc["input_ids"], dtype=torch.long),
+#                 }
 
 
 
@@ -670,8 +671,7 @@ class TrainIterableDatasetVarCtx(IterableDataset):
         tok_name_or_path: str,   # kept so you can still seed/tokeniser-config in workers if needed
         tok_kwargs: dict,
         want_ctx_size: int,      # token max length (used by collate_fn)
-        max_lines_in_context: int,
-        min_lines_in_context: int = 16,
+        want_lines_in_ctx: list, 
         shuffle_files: bool = True,
     ):
         super().__init__()
@@ -679,24 +679,25 @@ class TrainIterableDatasetVarCtx(IterableDataset):
         self.tok_name_or_path = tok_name_or_path
         self.tok_kwargs = tok_kwargs
         self.want_ctx_size = int(want_ctx_size)
-        self.max_lines_in_context = int(max_lines_in_context)
-        self.min_lines_in_context = int(min_lines_in_context)
+        self.want_lines_in_ctx = want_lines_in_ctx
         self.shuffle_files = shuffle_files
 
-        self._context_schedule = self._build_context_schedule(
-            self.min_lines_in_context, self.max_lines_in_context
-        )
-        if not self._context_schedule:
-            raise ValueError(
-                f"No powers-of-two between min={self.min_lines_in_context} and max={self.max_lines_in_context}."
-            )
+        # # self._context_schedule = self._build_context_schedule(
+        # #     self.min_lines_in_context, self.max_lines_in_context
+        # # )
+        # self._context_schedule = 
 
-    def _build_context_schedule(self, min_ctx: int, max_ctx: int) -> List[int]:
-        if min_ctx > max_ctx:
-            min_ctx, max_ctx = max_ctx, min_ctx
-        k0 = math.ceil(math.log2(max(1, min_ctx)))
-        k1 = math.floor(math.log2(max(1, max_ctx)))
-        return [1 << k for k in range(k0, k1 + 1) if (1 << k) >= min_ctx and (1 << k) <= max_ctx]
+        # if not self._context_schedule:
+        #     raise ValueError(
+        #         f"No powers-of-two between min={self.min_lines_in_context} and max={self.max_lines_in_context}."
+        #     )
+
+    # def _build_context_schedule(self, min_ctx: int, max_ctx: int) -> List[int]:
+    #     if min_ctx > max_ctx:
+    #         min_ctx, max_ctx = max_ctx, min_ctx
+    #     k0 = math.ceil(math.log2(max(1, min_ctx)))
+    #     k1 = math.floor(math.log2(max(1, max_ctx)))
+    #     return [1 << k for k in range(k0, k1 + 1) if (1 << k) >= min_ctx and (1 << k) <= max_ctx]
 
     @staticmethod
     def _floor_pow2(n: int) -> int:
@@ -711,7 +712,9 @@ class TrainIterableDatasetVarCtx(IterableDataset):
         if self.shuffle_files:
             rng.shuffle(file_iter)
 
-        schedule = self._context_schedule
+        # schedule = self._context_schedule
+        schedule = self.want_lines_in_ctx
+        
         sched_idx = rng.randrange(len(schedule))
 
         for p in file_iter:
@@ -720,20 +723,26 @@ class TrainIterableDatasetVarCtx(IterableDataset):
                 continue
 
             n_lines = len(lines)
-            i = self.min_lines_in_context
-            while i < n_lines:
-                want_ctx = schedule[sched_idx]
-                sched_idx = (sched_idx + 1) % len(schedule)
 
-                ctx_cap = self._floor_pow2(i)
-                if ctx_cap == 0:
-                    i += 1
-                    continue
-                ctx = want_ctx if want_ctx <= ctx_cap else ctx_cap
+            want_ctx_lines = schedule[sched_idx]
+            sched_idx = (sched_idx + 1) % len(schedule)
+            # select a random start point from 0 to (n_lines) - want_ctx_lines
+            if want_ctx_lines > n_lines:# tiny file
+                range_start = 0
+                range_end = len(lines)
+            else:
+                range_start = random.randint(0,  n_lines - want_ctx_lines)
+                range_end = range_start + want_ctx_lines
 
-                text = "\n".join(lines[i - ctx : i] + [lines[i]])
-                yield text
-                i += 1
+            text ="\n".join(lines[range_start:range_end]) 
+            if len(text) > self.want_ctx_size: text = text[0:self.want_ctx_size]
+            
+            # print(f"Dataset read a file with {n_lines}. My job is to select a chunk from that file of size {want_ctx_lines}")
+            # print(f"Selected chunk from {range_start} to {range_end}")            
+            # print(text)
+            yield text
+
+    
 
 
 # --------------------
@@ -755,7 +764,6 @@ class SimpleDataModule(L.LightningDataModule):
         batch_size (int): Number of samples per batch.
         num_workers (int): Number of worker processes for data loading.
         pin_memory (bool): Whether to use pinned memory in data loaders.
-        val_sample_count (int, optional): Number of validation samples to preview. Defaults to 3.
 
     Attributes:
         _train_files (list[Path] | None): List of training file paths.
@@ -781,7 +789,6 @@ class SimpleDataModule(L.LightningDataModule):
         batch_size: int,
         num_workers: int,
         pin_memory: bool,
-        val_sample_count: int = 3,
         max_lines_in_context: int = 64,   # max lines of context to feed, where in njam, one line is one musical event
         min_lines_in_context: int = 8,
      
@@ -796,7 +803,6 @@ class SimpleDataModule(L.LightningDataModule):
         self.batch_size = batch_size
         self.num_workers = num_workers
         self.pin_memory = pin_memory
-        self.val_sample_count = val_sample_count
 
         self._train_files: list[Path] | None = None
         self._train_ds = None
@@ -807,7 +813,7 @@ class SimpleDataModule(L.LightningDataModule):
         test_folder   = self.data_dir / "validation"
         files = find_text_files(test_folder)
         ctx_stats = SimpleDataModule.get_context_stats_for_file(files[0], self.tokenizer, self.want_ctx_size)
-        # print(f"{ctx_stats}")
+        print(f"SimpleDataModule: analysed model to find max ctx sentences. Heres the stats: {ctx_stats}")
         def floor_power_of_two(n: int) -> int:
             if n < 1:
                 raise ValueError("n must be >= 1")
@@ -819,7 +825,14 @@ class SimpleDataModule(L.LightningDataModule):
         if self.min_lines_in_context > self.max_lines_in_context:
             # go down to the next power of two below self.max_lines_in_context
             self.min_lines_in_context = floor_power_of_two(self.max_lines_in_context - 1)
-
+        # now set up the list of 'lines in ctx' we can do with min and mac
+        lines_in_ctx = []
+        val = self.min_lines_in_context
+        while val <= self.max_lines_in_context:
+            lines_in_ctx.append(val)
+            val *= 2
+        print(f"SipleDatamodule chose lines in ctx: {lines_in_ctx} where max is {self.max_lines_in_context}")
+        self.lines_in_ctx = lines_in_ctx
 
     def setup(self, stage: str | None = None):
         train_root = self.data_dir / "training"
@@ -851,6 +864,7 @@ class SimpleDataModule(L.LightningDataModule):
                 train_files = find_text_files(train_root)
                 assert len(train_files) > 0, "No training files found"
                 self._train_files = train_files
+                print(f"SimpleDataModule:: setup about to train - using {len(train_files)} training data files")
                 # LOG.info(f"Train files: {len(self._train_files)}")
             if self._val_ds is None:
                 self.setup(stage="validate")
@@ -868,8 +882,9 @@ class SimpleDataModule(L.LightningDataModule):
                 "trust_remote_code": getattr(self.tokenizer, "init_kwargs", {}).get("trust_remote_code", False),
             },
             want_ctx_size=self.want_ctx_size,          # or whatever you pass in today
-            max_lines_in_context=self.max_lines_in_context,
-            min_lines_in_context=self.min_lines_in_context,
+            want_lines_in_ctx=self.lines_in_ctx, 
+            # max_lines_in_context=self.max_lines_in_context,
+            # min_lines_in_context=self.min_lines_in_context,
             shuffle_files=True,
         )
 
