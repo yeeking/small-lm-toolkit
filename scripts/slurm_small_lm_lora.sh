@@ -6,4 +6,4 @@
 #SBATCH --nodelist ben  # bill be broke for now
 #SBATCH  -o small-lm-lora-test.log      # write output to log file
 
-srun   -l python ./src/7_run_lora_finetunes.py  --config ./data/models_plan_sorted.json   --data_dir ./data/small-lm-pijama   --out_dir ./runs_lora   --epochs 2   --auto_scale_bs   --lora_r 16 --lora_alpha 32 --lora_dropout 0.05   --lora_target_modules all-linear
+srun   -l python ./src/7_run_lora_finetunes.py  --config ./data/models_plan_sorted.json   --data_dir ./data/small-lm-pijama   --out_dir ./runs_lora   --epochs 20   --auto_scale_bs   --lora_r 16 --lora_alpha 32 --lora_dropout 0.05   --lora_target_modules all-linear

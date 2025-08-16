@@ -13,7 +13,7 @@ assert os.path.exists(src_folder), f"Source code not found {src_folder}"
 # json_file = os.path.join(data_folder, 'models_plan_sorted.json')
 pycmd = f"python {os.path.join(src_folder, '5_run_finetunes.py')}"
 pycmd += f" --config {json_file} --data_dir {data_folder}"
-pycmd += f" --epochs 5 --auto_scale_bs --model "
+pycmd += f" --epochs 20 --auto_scale_bs --model "
 
 with open(json_file) as f:
     jdata = json.load(f)
