@@ -6,4 +6,4 @@
 #SBATCH --nodelist ben  # bill be broke for now
 #SBATCH  -o small-lm-finetune-5.log      # write output to log file
 
-srun -l python ./src/5_run_finetunes.py --config ./data/models_plan.json --data_dir ./data/medium_dataset/ --epochs 5 --auto_scale_bs 
+srun -l python ./src/5_run_finetunes.py --config ./data/models_plan.json --data_dir ./data/medium_dataset/ --epochs 5 --auto_scale_bs --model EleutherAI/pythia-70m

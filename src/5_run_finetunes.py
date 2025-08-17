@@ -248,7 +248,7 @@ def run_for_model(model_cfg: Dict[str, Any], args: argparse.Namespace, global_ou
         num_workers=num_workers,
         pin_memory=pin_memory,
         min_lines_in_context=8, 
-        max_lines_in_context=128, 
+        max_lines_in_context=64, 
         # can optionally specify the min and max lines of context here, aka 'previous notes'
     )
  
@@ -286,9 +286,10 @@ def run_for_model(model_cfg: Dict[str, Any], args: argparse.Namespace, global_ou
         logger=logger,
         callbacks=callbacks,
         log_every_n_steps=10,
-        # max_steps=args.max_steps,  # if set, bypasses step estimation
+ 	max_steps=args.epochs * 100000, # very high as it hept stopping         
+# max_steps=args.max_steps,  # if set, bypasses step estimation
         deterministic=False,
-        enable_progress_bar=True,
+        enable_progress_bar=False,
         # checkpointing is enabled by default; explicit for clarity
         enable_checkpointing=True,
         num_sanity_val_steps=0,  # skip extra pre-training val
@@ -380,11 +381,11 @@ def parse_args():
     p.add_argument("--model", type=str, required=False, default=None, help="only run one model with this HF model name - needs to be in the JSON file")  
     p.add_argument("--data_dir", type=str, required=True, help="Data directory with training/ and validation/")
     p.add_argument("--out_dir", type=str, default="./runs", help="Output root directory")
-    p.add_argument("--epochs", type=int, default=1)
+    p.add_argument("--epochs", type=int, default=100)
     p.add_argument("--batch_size", type=int, default=4, help="Starting batch size (may be auto-scaled or reduced on OOM)")    
     # p.add_argument("--auto_scale_bs", action="store_true", help="Use Lightning Tuner to auto-scale batch size")
     p.add_argument("--accumulate_grad_batches", type=int, default=1)
-    p.add_argument("--want_ctx_size", type=int, default=4096, help="Max tokens per example")
+    p.add_argument("--want_ctx_size", type=int, default=2048, help="Max tokens per example")
     # p.add_argument("--context", type=int, default=64, help="Number of previous lines as context. in NJAM, that's number of notes")
     p.add_argument("--lr", type=float, default=2e-5)
     p.add_argument("--weight_decay", type=float, default=0.01)
