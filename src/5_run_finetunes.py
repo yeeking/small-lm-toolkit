@@ -163,18 +163,18 @@ class CausalLMModule(L.LightningModule):
 
 
     def configure_optimizers(self):
-        optimizer = AdamW(self.parameters(), lr=self.lr, weight_decay=self.weight_decay)
-        # Prefer trainer.max_steps if provided
-        total_steps = getattr(self.trainer, "max_steps", None)
-        if not total_steps or total_steps < 0:
-            total_steps = getattr(self.trainer, "estimated_stepping_batches", None)
-        if not total_steps or total_steps <= 0:
-            # last-resort fallback (e.g., user forgot --max_steps). keep small but nonzero.
-            total_steps = 1000
+        """This configuration drives learning rate scheduling using epoch"""
+        opt = AdamW(self.parameters(), lr=self.lr, weight_decay=self.weight_decay)
 
-        warmup_steps = max(1, int(total_steps * self.warmup_ratio))
-        scheduler = get_linear_schedule_with_warmup(optimizer, warmup_steps, total_steps)
-        return {"optimizer": optimizer, "lr_scheduler": {"scheduler": scheduler, "interval": "step", "name": "linear_warmup"}}
+        warmup_epochs = max(1, int(self.trainer.max_epochs * self.warmup_ratio))
+        def lr_lambda(epoch):
+            if epoch < warmup_epochs:
+                return float(epoch + 1) / float(warmup_epochs)   # linear warmup
+            progress = (epoch - warmup_epochs) / max(1, self.trainer.max_epochs - warmup_epochs)
+            return max(0.0, 1.0 - progress)                      # linear decay
+
+        sch = torch.optim.lr_scheduler.LambdaLR(opt, lr_lambda)
+        return {"optimizer": opt, "lr_scheduler": {"scheduler": sch, "interval": "epoch", "name": "epoch_warmup_linear"}}
 
 
 
@@ -279,7 +279,9 @@ def run_for_model(model_cfg: Dict[str, Any], args: argparse.Namespace, global_ou
         accelerator=accelerator,
         devices=devices,
         strategy="auto",
+        # max_epochs=args.epochs,
         max_epochs=args.epochs,
+        min_epochs=args.epochs,   # run exactly N epochs
         precision=precision,
         accumulate_grad_batches=args.accumulate_grad_batches,
         gradient_clip_val=args.grad_clip if args.grad_clip > 0 else None,

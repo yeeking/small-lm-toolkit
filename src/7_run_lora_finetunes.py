@@ -142,18 +142,20 @@ class CausalLMWithLoRA(L.LightningModule):
             LOG.warning(f"Sample generation failed: {e}")
 
     def configure_optimizers(self):
-        # optimize only trainable (adapter) params
+        """This configuration drives learning rate scheduling using epoch"""
         trainable = [p for p in self.model.parameters() if p.requires_grad]
         optimizer = AdamW(trainable, lr=self.lr, weight_decay=self.weight_decay)
 
-        total_steps = getattr(self.trainer, "max_steps", None)
-        if not total_steps or total_steps < 0:
-            total_steps = getattr(self.trainer, "estimated_stepping_batches", None)
-        if not total_steps or total_steps <= 0:
-            total_steps = 1000
-        warmup_steps = max(1, int(total_steps * self.warmup_ratio))
-        scheduler = get_linear_schedule_with_warmup(optimizer, warmup_steps, total_steps)
-        return {"optimizer": optimizer, "lr_scheduler": {"scheduler": scheduler, "interval": "step", "name": "linear_warmup"}}
+        warmup_epochs = max(1, int(self.trainer.max_epochs * self.warmup_ratio))
+        def lr_lambda(epoch):
+            if epoch < warmup_epochs:
+                return float(epoch + 1) / float(warmup_epochs)   # linear warmup
+            progress = (epoch - warmup_epochs) / max(1, self.trainer.max_epochs - warmup_epochs)
+            return max(0.0, 1.0 - progress)                      # linear decay
+
+        sch = torch.optim.lr_scheduler.LambdaLR(opt, lr_lambda)
+        return {"optimizer": opt, "lr_scheduler": {"scheduler": sch, "interval": "epoch", "name": "epoch_warmup_linear"}}
+
 
     def on_train_end(self):
         # Always save a final adapter checkpoint
