@@ -380,6 +380,25 @@ def load_model_no_cache(hf_repo, size_b, trust_remote_code):
     
     return tokenizer, model
 
+def reinit_model_weights(model):
+    """
+    Reinitialize all model parameters to random values using the model's initialization scheme.
+    """
+    def _init_weights(module):
+        if isinstance(module, (torch.nn.Linear, torch.nn.Embedding)):
+            # Reinitialize linear and embedding weights from normal distribution
+            module.weight.data.normal_(mean=0.0, std=0.02)
+            if isinstance(module, torch.nn.Linear) and module.bias is not None:
+                module.bias.data.zero_()
+        elif isinstance(module, torch.nn.LayerNorm):
+            # Initialize LayerNorm weights to 1.0 and bias to 0.0
+            module.bias.data.zero_()
+            module.weight.data.fill_(1.0)
+
+    # Apply initialization to all model parameters
+    model.apply(_init_weights)
+    return model
+
 def load_model_lora(hf_repo: str, trust_remote_code: bool, args) -> tuple[AutoTokenizer, AutoModelForCausalLM]:
     # LOG.info(f"Loading tokenizer: {hf_repo}")
     tokenizer = AutoTokenizer.from_pretrained(hf_repo, use_fast=True, trust_remote_code=trust_remote_code)

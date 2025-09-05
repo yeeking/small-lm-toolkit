@@ -210,6 +210,9 @@ def run_for_model(model_cfg: Dict[str, Any], args: argparse.Namespace, global_ou
     assert tokenizer is not None, f"Tokenizer did not load correctly."
     assert model is not None, f"Mode did not load correctly."
     
+    if args.randomise_weights:
+        LOG.info(f"Randomising the model weights for a from-scratch training run")
+        shared_utils.reinit_model_weights(model)
 
 
     if tokenizer.pad_token is None:
