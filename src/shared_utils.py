@@ -687,13 +687,39 @@ class TrainIterableDatasetVarCtx(IterableDataset):
     def __init__(
         self,
         files: Iterable[str | Path],
-        tok_name_or_path: str,   # kept so you can still seed/tokeniser-config in workers if needed
+        tok_name_or_path: str,
         tok_kwargs: dict,
-        want_ctx_size: int,      # token max length (used by collate_fn)
-        want_lines_in_ctx: list, 
+        want_ctx_size: int,
+        want_lines_in_ctx: list,
         shuffle_files: bool = True,
     ):
         super().__init__()
+        # Input validation
+        assert files, "files iterable cannot be empty"
+        self.files = [Path(p) for p in files]
+        
+        # Validate files
+        for f in self.files:
+            assert f.exists(), f"File not found: {f}"
+            assert f.is_file(), f"Not a file: {f}"
+            assert f.stat().st_size > 0, f"File is empty: {f}"
+
+        # Validate tokenizer path
+        assert tok_name_or_path, "tok_name_or_path cannot be empty"
+        assert isinstance(tok_name_or_path, str), f"tok_name_or_path must be string, got {type(tok_name_or_path)}"
+        
+        # Validate context parameters
+        assert isinstance(want_ctx_size, int), f"want_ctx_size must be integer, got {type(want_ctx_size)}"
+        assert want_ctx_size > 0, f"want_ctx_size must be positive, got {want_ctx_size}"
+        
+        # Validate want_lines_in_ctx
+        assert isinstance(want_lines_in_ctx, list), "want_lines_in_ctx must be a list"
+        assert want_lines_in_ctx, "want_lines_in_ctx cannot be empty"
+        assert all(isinstance(x, int) and x > 0 for x in want_lines_in_ctx), \
+            "want_lines_in_ctx must contain positive integers"
+        assert sorted(want_lines_in_ctx) == want_lines_in_ctx, \
+            "want_lines_in_ctx must be sorted in ascending order"
+
         self.files = list(files)
         self.tok_name_or_path = tok_name_or_path
         self.tok_kwargs = tok_kwargs
@@ -725,43 +751,48 @@ class TrainIterableDatasetVarCtx(IterableDataset):
     def __iter__(self):
         rng = random.Random(torch.initial_seed() % (2**32))
         worker = get_worker_info()
+        print(f"Iterator starting with worker info: {worker}")  # Debug print 1
 
         file_iter = self.files if worker is None else self.files[worker.id :: worker.num_workers]
         file_iter = list(file_iter)
+        print(f"Files to process: {len(file_iter)}")  # Debug print 2
+        
         if self.shuffle_files:
             rng.shuffle(file_iter)
 
-        # schedule = self._context_schedule
         schedule = self.want_lines_in_ctx
+        print(f"Using context schedule: {schedule}")  # Debug print 3
         
         sched_idx = rng.randrange(len(schedule))
+        total_yielded = 0  # Add counter
 
         for p in file_iter:
-            # print(f"TrainIterableDatasetVarCtx reading file {p}")
+            print(f"Processing file: {p}")  # Debug print 4
             lines = safe_read_lines(Path(p))
             if not lines:
+                print(f"Warning: No lines found in file {p}")  # Debug print 5
                 continue
 
             n_lines = len(lines)
-
             want_ctx_lines = schedule[sched_idx]
             sched_idx = (sched_idx + 1) % len(schedule)
-            # select a random start point from 0 to (n_lines) - want_ctx_lines
-            if want_ctx_lines > n_lines:# tiny file
+
+            if want_ctx_lines > n_lines:
+                print(f"Warning: File {p} has only {n_lines} lines, wanted {want_ctx_lines}")
                 range_start = 0
                 range_end = len(lines)
             else:
-                range_start = random.randint(0,  n_lines - want_ctx_lines)
+                range_start = random.randint(0, n_lines - want_ctx_lines)
                 range_end = range_start + want_ctx_lines
 
-            text ="\n".join(lines[range_start:range_end]) 
-            if len(text) > self.want_ctx_size: text = text[0:self.want_ctx_size]
-            
-            # print(f"Dataset read a file with {n_lines}. My job is to select a chunk from that file of size {want_ctx_lines}")
-            # print(f"Selected chunk from {range_start} to {range_end}")            
-            # print(text)
+            text = "\n".join(lines[range_start:range_end])
+            if len(text) > self.want_ctx_size:
+                text = text[0:self.want_ctx_size]
+
+            total_yielded += 1
             yield text
 
+        print(f"Iterator finished. Total samples yielded: {total_yielded}")  # Debug print 6
     
 
 
@@ -893,6 +924,14 @@ class SimpleDataModule(L.LightningDataModule):
         if self._train_files is None:
             self.setup(stage="fit")
 
+        print(f"Creating train dataloader with {len(self._train_files)} files")  # Debug print
+        
+        # Validate files before creating dataset
+        assert self._train_files, "No training files available"
+        for f in self._train_files:
+            assert f.exists(), f"Training file not found: {f}"
+            assert f.stat().st_size > 0, f"Training file is empty: {f}"
+
         ds = TrainIterableDatasetVarCtx(
             files=self._train_files,
             tok_name_or_path=self.tokenizer.name_or_path,
@@ -900,18 +939,20 @@ class SimpleDataModule(L.LightningDataModule):
                 "use_fast": True,
                 "trust_remote_code": getattr(self.tokenizer, "init_kwargs", {}).get("trust_remote_code", False),
             },
-            want_ctx_size=self.want_ctx_size,          # or whatever you pass in today
-            want_lines_in_ctx=self.lines_in_ctx, 
-            # max_lines_in_context=self.max_lines_in_context,
-            # min_lines_in_context=self.min_lines_in_context,
+            want_ctx_size=self.want_ctx_size,
+            want_lines_in_ctx=self.lines_in_ctx,
             shuffle_files=True,
         )
 
-        # Ensure tokenizer padding/truncation sides are set once
-        if self.tokenizer.pad_token is None:
-            self.tokenizer.pad_token = self.tokenizer.eos_token or self.tokenizer.cls_token
-        self.tokenizer.truncation_side = "left"
-        self.tokenizer.padding_side = "right"
+        # Test the iterator before creating DataLoader
+        test_iter = iter(ds)
+        try:
+            first_item = next(test_iter)
+            print(f"Successfully got first item from dataset, length: {len(first_item)}")
+        except StopIteration:
+            raise RuntimeError("Dataset iterator is empty!")
+        except Exception as e:
+            raise RuntimeError(f"Error testing dataset iterator: {e}")
 
         return DataLoader(
             ds,
@@ -974,4 +1015,39 @@ class SimpleDataModule(L.LightningDataModule):
         }
 
         return stats
+
+    def validate_data_assumptions(self):
+        """Validates all data assumptions before training/validation starts"""
+        # Check directory structure
+        train_dir = self.data_dir / "training"
+        val_dir = self.data_dir / "validation"
+        assert train_dir.exists() and train_dir.is_dir(), f"Training directory not found: {train_dir}"
+        assert val_dir.exists() and val_dir.is_dir(), f"Validation directory not found: {val_dir}"
+
+        # Check files exist
+        train_files = find_text_files(train_dir)
+        val_files = find_text_files(val_dir)
+        assert len(train_files) > 0, f"No training files found in {train_dir}"
+        assert len(val_files) > 0, f"No validation files found in {val_dir}"
+
+        # Check file contents
+        for file in train_files + val_files:
+            lines = safe_read_lines(file)
+            assert lines, f"No valid lines found in {file}"
+            assert len(lines) >= self.min_lines_in_context, \
+                f"File {file} has fewer lines ({len(lines)}) than min_lines_in_context ({self.min_lines_in_context})"
+
+        # Validate context parameters
+        assert self.min_lines_in_context > 0, f"min_lines_in_context must be positive, got {self.min_lines_in_context}"
+        assert self.max_lines_in_context >= self.min_lines_in_context, \
+            f"max_lines_in_context ({self.max_lines_in_context}) must be >= min_lines_in_context ({self.min_lines_in_context})"
+        
+        # Check if lines_in_ctx is properly configured
+        assert self.lines_in_ctx, "lines_in_ctx cannot be empty"
+        assert all(isinstance(x, int) and x > 0 for x in self.lines_in_ctx), \
+            "lines_in_ctx must contain positive integers"
+        assert sorted(self.lines_in_ctx) == self.lines_in_ctx, \
+            "lines_in_ctx must be sorted in ascending order"
+
+        return True
 

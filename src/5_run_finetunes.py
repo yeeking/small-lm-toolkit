@@ -114,6 +114,8 @@ class CausalLMModule(L.LightningModule):
             tb = self.logger.experiment
             tb.add_scalar("model/num_parameters", float(self._param_count), self.global_step)
             tb.add_text("model/tokenizer_info", f"vocab_size={self.tokenizer.vocab_size}", self.global_step)
+        LOG.info(f"Got to end of on_train_start...")
+        
 
     def on_validation_epoch_end(self):
         # Perplexity from aggregated val_loss
