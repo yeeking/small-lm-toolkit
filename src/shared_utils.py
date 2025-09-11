@@ -737,6 +737,7 @@ class TrainIterableDatasetVarCtx(IterableDataset):
         sched_idx = rng.randrange(len(schedule))
 
         for p in file_iter:
+            # print(f"TrainIterableDatasetVarCtx reading file {p}")
             lines = safe_read_lines(Path(p))
             if not lines:
                 continue
@@ -884,7 +885,6 @@ class SimpleDataModule(L.LightningDataModule):
                 assert len(train_files) > 0, "No training files found"
                 self._train_files = train_files
                 print(f"SimpleDataModule:: setup about to train - using {len(train_files)} training data files")
-                # LOG.info(f"Train files: {len(self._train_files)}")
             if self._val_ds is None:
                 self.setup(stage="validate")
 

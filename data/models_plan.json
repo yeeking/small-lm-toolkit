@@ -112,7 +112,7 @@
       "notes": ">2B; optional."
     },
     {
-      "family": "SmolLM",
+      "family": "SmolLM", 
       "size_b": 0.135,
       "hf_repo": "HuggingFaceTB/SmolLM-135M",
       "tokenizer": "AutoTokenizer",

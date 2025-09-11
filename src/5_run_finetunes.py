@@ -95,6 +95,7 @@ class CausalLMModule(L.LightningModule):
         return self.model(**batch)
 
     def training_step(self, batch, batch_idx):
+        LOG.info("inside training_step")
         out = self.model(**batch)
         loss = out.loss
         self.log("train_loss", loss, on_step=True, on_epoch=False, prog_bar=True)
@@ -103,12 +104,12 @@ class CausalLMModule(L.LightningModule):
     def validation_step(self, batch, batch_idx):
         out = self.model(**batch)
         val_loss = out.loss
-        self.log("val_loss", val_loss, on_step=False, on_epoch=True, prog_bar=True, sync_dist=True)
-        # LOG.info(f"Validation step complete")
+        print(f"Validation step called, val_loss={val_loss.item()}")
+        self.log("val_loss", val_loss, on_step=True, on_epoch=True, prog_bar=True)
         return val_loss
 
     def on_train_start(self):
-        LOG.info(f"on_train_start training starting up")
+        LOG.info(f"on_train_start training starting up. callback metrics: {self.trainer.callback_metrics}")
         if isinstance(self.logger, TensorBoardLogger):
             tb = self.logger.experiment
             tb.add_scalar("model/num_parameters", float(self._param_count), self.global_step)
@@ -122,7 +123,7 @@ class CausalLMModule(L.LightningModule):
         if val_loss is not None:
             try:
                 ppl = torch.exp(val_loss)
-                self.log("perplexity", ppl, prog_bar=True, sync_dist=True)
+                self.log("perplexity", ppl, prog_bar=True)
                 if isinstance(self.logger, TensorBoardLogger):
                     self.logger.experiment.add_scalar("val/perplexity", float(ppl), self.global_step)
             except Exception:
@@ -254,7 +255,8 @@ def run_for_model(model_cfg: Dict[str, Any], args: argparse.Namespace, global_ou
         max_lines_in_context=64, 
         # can optionally specify the min and max lines of context here, aka 'previous notes'
     )
- 
+    LOG.info(f"Validation batches: {len(datamodule.val_dataloader())}")
+    
 
     lit_module = CausalLMModule(
         model=model,
@@ -302,7 +304,7 @@ def run_for_model(model_cfg: Dict[str, Any], args: argparse.Namespace, global_ou
  	max_steps=args.epochs * 100000, # very high as it hept stopping         
 # max_steps=args.max_steps,  # if set, bypasses step estimation
         deterministic=False,
-        enable_progress_bar=False,
+        enable_progress_bar=args.progress_bar,
         # checkpointing is enabled by default; explicit for clarity
         enable_checkpointing=True,
         num_sanity_val_steps=0,  # skip extra pre-training val
@@ -329,11 +331,13 @@ def run_for_model(model_cfg: Dict[str, Any], args: argparse.Namespace, global_ou
     LOG.info(f"Chose batch size {datamodule.batch_size}")
 
     # Full validation BEFORE training (beyond sanity val)
-    LOG.info("Running initial full validation...")
-    # try:
-    trainer.validate(lit_module, datamodule=datamodule, verbose=False)
-    # except Exception as e:
-        # LOG.warning(f"Initial validation encountered an issue (continuing): {e}")
+    # LOG.info("Running initial full validation...")
+    # # try:
+    # trainer.validate(lit_module, datamodule=datamodule, verbose=False)
+    # # except Exception as e:
+    #     # LOG.warning(f"Initial validation encountered an issue (continuing): {e}")
+
+    # LOG.info("Validation complete...")
 
     # Train with OOM fallback (halve batch size until it fits)
     bs = datamodule.batch_size
@@ -398,6 +402,8 @@ def parse_args():
     p.add_argument("--batch_size", type=int, default=4, help="Starting batch size (may be auto-scaled or reduced on OOM)")    
     p.add_argument("--save_ckpt_every", type=int, default=10, help="Save checkpoint every N epochs")
     p.add_argument("--randomise_weights", type=bool, default=False, help="Set to true to randomsze model weights before training")
+    p.add_argument("--progress_bar", type=bool, default=False, help="Show a pbar during validation and training")
+    
     # p.add_argument("--auto_scale_bs", action="store_true", help="Use Lightning Tuner to auto-scale batch size")
     p.add_argument("--accumulate_grad_batches", type=int, default=1)
     p.add_argument("--want_ctx_size", type=int, default=2048, help="Max tokens per example")
