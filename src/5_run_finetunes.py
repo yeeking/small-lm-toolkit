@@ -254,8 +254,8 @@ def run_for_model(model_cfg: Dict[str, Any], args: argparse.Namespace, global_ou
     )
     LOG.info(f"Validation batches: {len(datamodule.val_dataloader())}")
     
-
-    lit_module = CausalLMModule(
+    # the actual model or at least the lightning wrapper around it 
+    smallm_model = CausalLMModule(
         model=model,
         tokenizer=tokenizer,
         lr=args.lr,
@@ -263,6 +263,14 @@ def run_for_model(model_cfg: Dict[str, Any], args: argparse.Namespace, global_ou
         warmup_ratio=args.warmup_ratio,
         max_new_tokens=args.sample_max_new_tokens,
     )
+
+    # renders example output from the model during training 
+    example_renderer = shared_utils.HFPreviewResponder(smallm_model, shared_utils.PreviewGenConfig(
+        max_new_tokens=64,
+        do_sample=False,          # or True for sampling previews
+        return_full_text=False,   # only show continuation
+        truncate_to=1024, #smallm_model.trainer.datamodule.want_ctx_size if hasattr(smallm_model.trainer.datamodule, "want_ctx_size") else 1024,
+    ))
 
     callbacks = [
         LearningRateMonitor(logging_interval="step"),
@@ -283,6 +291,13 @@ def run_for_model(model_cfg: Dict[str, Any], args: argparse.Namespace, global_ou
             save_top_k=-1,  # Keep all checkpoints
             save_on_train_epoch_end=True,
         ),
+        # generates previews during training 
+        shared_utils.PreviewAudioCallback(
+            prompts=["what is the capital of paris? "], 
+            render_fn=example_renderer, 
+            every_n_epochs=1,  
+            every_n_steps=1
+        )
     ]
 
     trainer = Trainer(
@@ -310,7 +325,7 @@ def run_for_model(model_cfg: Dict[str, Any], args: argparse.Namespace, global_ou
     if args.auto_scale_bs:
         LOG.info(f"Prior to auto-scaling, batch size is {datamodule.batch_size}")
         try:
-            new_bs = shared_utils.autoscale_batch_size_mps_safe(lit_module, datamodule, accelerator, devices, precision)
+            new_bs = shared_utils.autoscale_batch_size_mps_safe(smallm_model, datamodule, accelerator, devices, precision)
             if new_bs: 
                 datamodule.batch_size = new_bs
                 LOG.info(f"Auto-scaled batch size (MPS-safe): {new_bs}")
@@ -331,7 +346,7 @@ def run_for_model(model_cfg: Dict[str, Any], args: argparse.Namespace, global_ou
     bs = datamodule.batch_size
     if bs > 0:
         LOG.info(f"Starting training with batch_size={bs}")
-        trainer.fit(lit_module, datamodule=datamodule, ckpt_path=None) # no ckpt by default to avoid it finding the ones created in batch size estimation
+        trainer.fit(smallm_model, datamodule=datamodule, ckpt_path=None) # no ckpt by default to avoid it finding the ones created in batch size estimation
     else:
         LOG.info(f"Batch size came out at zero for {hf_repo} to not gonna run it")
 

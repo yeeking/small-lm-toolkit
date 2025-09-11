@@ -3,7 +3,7 @@
 from pathlib import Path
 import os 
 import json 
-from typing import List, Dict, Any, Tuple, Iterable, Optional
+from typing import List, Dict, Any, Tuple, Iterable, Optional, Callable
 # from typing import Iterable, List, Optional, Dict, Any
 import random 
 import math
@@ -31,9 +31,363 @@ from lightning.pytorch.tuner.tuning import Tuner
 from peft import LoraConfig, get_peft_model, TaskType
 
 from functools import lru_cache
-
+import torchaudio
+import matplotlib.pyplot as plt
+from lightning.pytorch.callbacks import Callback
+from lightning.pytorch.utilities.rank_zero import rank_zero_only
+import pretty_midi  # if you choose MIDI rendering; requires fluidsynth/soundfont installed
+# import pypianoroll
+import librosa
+from dataclasses import dataclass
 
 TEXT_EXTS = {".txt", ".md", ".text"}
+
+
+
+def njam_to_midi_real(njam_text:str, outfile:str):
+    """convert the sent njam string into midi events and save to a file"""
+    return ""
+
+def njam_to_midi(njam_text:str, outfile:str):
+    """test version of njam to midi that generates a simple midi file"""
+    # Create a PrettyMIDI object
+    cello_c_chord = pretty_midi.PrettyMIDI()
+    # Create an Instrument instance for a cello instrument
+    cello_program = pretty_midi.instrument_name_to_program('Cello')
+    cello = pretty_midi.Instrument(program=cello_program)
+    # Iterate over note names, which will be converted to note number later
+    for note_name in ['C5', 'E5', 'G5']:
+        # Retrieve the MIDI note number for this note name
+        note_number = pretty_midi.note_name_to_number(note_name)
+        # Create a Note instance, starting at 0s and ending at .5s
+        note = pretty_midi.Note(
+            velocity=100, pitch=note_number, start=0, end=.5)
+        # Add it to our cello instrument
+        cello.notes.append(note)
+    # Add the cello instrument to the PrettyMIDI object
+    cello_c_chord.instruments.append(cello)
+    # Write out the MIDI data
+    cello_c_chord.write(outfile)
+
+def midi_to_pretty_midi(midifile:str):
+    """ load sent midi file and convert to pretty_midi object """
+    assert os.path.exists(midifile), f"Cannot find midi file {midifile}"
+    pm = pretty_midi.PrettyMIDI(midifile)
+    return pm 
+
+def pretty_midi_to_fig(pm:pretty_midi.PrettyMIDI):
+    """convert sent pretty midi object into a pyplot fig"""
+    # your code to plot the piano roll, as we discussed
+    fig = plt.figure(figsize=(8,3))
+    # mt = pypianoroll.from_pretty_midi(pm)
+    # pypianoroll.plot(mt, preset="full")
+    fig.tight_layout()
+    fs = 100 # 1/fs steps per second
+    start_pitch = 24
+    end_pitch = 96
+    librosa.display.specshow(pm.get_piano_roll(fs)[start_pitch:end_pitch],
+                             hop_length=1, sr=fs, x_axis='time', y_axis='cqt_note',
+                             fmin=pretty_midi.note_number_to_hz(start_pitch))
+
+    return fig
+
+def pretty_midi_to_audio(pm:pretty_midi.PrettyMIDI, sr:int=16000):
+    """render sent pretty_midi object into wonderful music and return raw audio samples"""
+    audio = pm.fluidsynth(fs=sr)  # numpy [T]
+    wave = torch.from_numpy(audio).unsqueeze(0)  # [1, T], float
+    return wave, sr
+
+
+def extract_prompts_from_batch(
+    batch,
+    tokenizer,
+    k: int = 4,
+    mode: str = "auto",                      # "auto" | "labels" | "markers" | "full"
+    assistant_markers: Optional[List[str]] = None,  # e.g. ["<|assistant|>", "### Assistant:"]
+) -> List[str]:
+    """
+    Return up to k prompt strings from a LM batch.
+    - Always trims trailing pad via attention_mask/pad_token_id.
+    - If mode == "labels" (or auto-detected), uses labels==-100 (prompt masking at START) to cut before target.
+    - If mode == "markers", splits by the earliest occurrence of any marker string.
+    - Else returns the full trimmed input.
+    """
+    input_ids = batch["input_ids"]
+    attn = batch.get("attention_mask")
+    labels = batch.get("labels")
+    B = input_ids.size(0)
+
+    texts = []
+    for b in range(min(B, k)):
+        ids = input_ids[b]
+
+        # 1) Trim to real tokens
+        if attn is not None:
+            seq_len = int(attn[b].sum().item())
+        else:
+            pad_id = tokenizer.pad_token_id
+            if pad_id is not None:
+                nonpad = (ids != pad_id).nonzero(as_tuple=True)[0]
+                seq_len = int(nonpad[-1].item()) + 1 if len(nonpad) > 0 else 0
+            else:
+                seq_len = ids.size(0)
+        ids = ids[:seq_len]
+
+        # 2) Try to get "prompt-only"
+        used_prompt_cut = False
+        if (mode in ("auto", "labels")) and (labels is not None):
+            lab = labels[b][:seq_len]
+            # Convention A (prompt masked): labels start with -100 and become valid at first target token
+            if lab.numel() > 0 and lab[0].item() == -100 and (lab != -100).any():
+                tgt_start = int((lab != -100).nonzero(as_tuple=True)[0][0].item())
+                ids = ids[:tgt_start]
+                used_prompt_cut = True
+
+        if not used_prompt_cut and (mode in ("auto", "markers") and assistant_markers):
+            # Decode with specials preserved so markers can be found in raw text
+            raw = tokenizer.decode(ids.tolist(), skip_special_tokens=False)
+            cut = _find_first_marker(raw, assistant_markers)
+            if cut is not None:
+                # Re-tokenize only the prompt part to stay consistent
+                prompt_ids = tokenizer(raw[:cut], add_special_tokens=False)["input_ids"]
+                ids = ids.new_tensor(prompt_ids)
+
+        texts.append(tokenizer.decode(ids.tolist(), skip_special_tokens=True).strip())
+    return texts
+
+def _find_first_marker(text: str, markers: List[str]) -> Optional[int]:
+    idxs = [text.find(m) for m in markers]
+    idxs = [i for i in idxs if i != -1]
+    return min(idxs) if idxs else None
+
+
+
+@dataclass
+class PreviewGenConfig:
+    max_new_tokens: int = 64
+    do_sample: bool = False           # set True for stochastic decoding
+    temperature: float = 0.7
+    top_p: float = 0.95
+    top_k: int = 50
+    num_beams: int = 1
+    repetition_penalty: float = 1.0   # >1.0 discourages repeats
+    truncate_to: Optional[int] = 1024 # max prompt length tokens (None = no extra truncation)
+    return_full_text: bool = False    # if False, only return the continuation (common for previews)
+    audio_sr: int = 16000
+    max_audio_secs: float = 8.0       # keep TB event files lean
+
+class HFPreviewResponder:
+    """
+    Uses the HF model/tokenizer inside your LightningModule to generate
+    batched continuations for string prompts, then converts them to
+    MIDI/PrettyMIDI/audio/figure via your existing helpers.
+    """
+    def __init__(self, pl_module, gen_cfg: PreviewGenConfig = PreviewGenConfig()):
+        self.pl_module = pl_module
+        self.cfg = gen_cfg
+        self.model = pl_module.model
+        self.tok = pl_module.tokenizer
+        self.device = pl_module.device
+
+        # Reasonable fallbacks for PAD/EOS to avoid generate() complaints.
+        # (Some decoder-only models don't have pad_token_id set.)
+        if self.tok.pad_token_id is None:
+            # safest fallback is EOS as PAD for decoder-only LMs
+            self.tok.pad_token = self.tok.eos_token
+
+        self.eos_id = self.tok.eos_token_id
+        self.pad_id = self.tok.pad_token_id
+
+    @torch.inference_mode()
+    def __call__(self, prompts: List[str]) -> List[Tuple[torch.Tensor, int, Dict[str, str], object]]:
+        """
+        Returns a list of tuples:
+          (waveform [1, T] float in [-1,1], sr, {"prompt": str, "gen": str}, pretty_midi_obj)
+
+        Note: we also crop audio to cfg.max_audio_secs.
+        """
+        print(f"HFPreviewResponder __call... prompt lens {[len(p) for p in prompts]}")
+        if not prompts:
+            return []
+
+        # 1) Tokenize as a batch (pad to longest, send to device)
+        enc = self.tok(
+            prompts,
+            return_tensors="pt",
+            padding=True,
+            truncation=True,
+            max_length=self.cfg.truncate_to if self.cfg.truncate_to else None,
+        )
+        enc = {k: v.to(self.device) for k, v in enc.items()}
+
+        # 2) Generate
+        #    See HF docs for arguments like max_new_tokens, sampling vs beams, etc.
+        #    Also set eos/pad ids explicitly for decoder-only models. :contentReference[oaicite:1]{index=1}
+        gen_ids = self.model.generate(
+            **enc,
+            max_new_tokens=self.cfg.max_new_tokens,
+            do_sample=self.cfg.do_sample,
+            temperature=self.cfg.temperature if self.cfg.do_sample else None,
+            top_p=self.cfg.top_p if self.cfg.do_sample else None,
+            top_k=self.cfg.top_k if self.cfg.do_sample else None,
+            num_beams=self.cfg.num_beams,
+            repetition_penalty=self.cfg.repetition_penalty,
+            pad_token_id=self.pad_id,
+            eos_token_id=self.eos_id,
+        )
+
+        # 3) Decode: full text or just the continuation
+        outs: List[str]
+        if self.cfg.return_full_text:
+            outs = self.tok.batch_decode(gen_ids, skip_special_tokens=True)
+        else:
+            # Slice off the prompt portion per item, so you only see new text
+            outs = []
+            input_lens = (enc["attention_mask"].sum(dim=1)).tolist()
+            for ids_row, in_len in zip(gen_ids, input_lens):
+                cont_ids = ids_row[in_len:]  # only newly generated tokens
+                outs.append(self.tok.decode(cont_ids, skip_special_tokens=True))
+
+        # 4) Convert each output to MIDI → PrettyMIDI → audio/figure
+        previews = []
+        for prompt, gen_text in zip(prompts, outs):
+            # You already have njam_to_midi → PrettyMIDI → audio/fig machinery.
+            with tempfile.NamedTemporaryFile(suffix=".mid", delete=False) as tmp:
+                midipath = tmp.name
+            try:
+                njam_to_midi(gen_text, midipath)
+                pm = midi_to_pretty_midi(midipath)
+                wave, sr = pretty_midi_to_audio(pm, sr=self.cfg.audio_sr)
+                # crop to keep TB small
+                max_len = int(self.cfg.max_audio_secs * sr)
+                wave = wave[..., :max_len]
+                previews.append((wave.cpu(), sr, {"prompt": prompt, "gen": gen_text}, pm))
+            finally:
+                try:
+                    os.remove(midipath)
+                except OSError:
+                    pass
+
+        return previews
+    
+
+class PreviewAudioCallback(Callback):
+    def __init__(
+        self,
+        prompts, 
+        render_fn: Optional[Callable] = None,
+        every_n_steps:int = 0, 
+        every_n_epochs: int = 1,
+        max_secs: float = 8.0,
+    ):
+        super().__init__()
+        self.prompts = prompts
+        self.every_n_epochs = every_n_epochs
+        self.max_secs = max_secs
+        self.every_n_steps = every_n_steps
+
+        if render_fn is None:
+            self.render_fn = self.default_render_fn
+        else:
+            self.render_fn = render_fn
+
+
+    @rank_zero_only
+    def on_train_batch_end(self, trainer, pl_module, outputs, batch, batch_idx):
+        """Called after every training batch """
+        # if "train" not in self.run_on: return
+        print(f"Preview gen callback triggered {trainer.global_step}")
+        if self.every_n_steps <= 0: return
+        if trainer.global_step % self.every_n_steps != 0: return
+        print(f"Preview gen callback rendering... {trainer.global_step}")
+
+        self._log_preview(trainer, pl_module, tag_prefix="train", prompts=self.prompts)
+
+    # @rank_zero_only
+    # def on_validation_batch_end(self, trainer, pl_module, outputs, batch, batch_idx, dataloader_idx=0):
+    #     print(f"on_validation_batch_end")
+    #     if trainer.global_step % self.every_n_steps != 0: return
+    #     prompts = prompts_from_batch(batch, pl_module.tokenizer, k=3)
+    #     self._log_preview(trainer, pl_module, tag_prefix="train", prompts=prompts)
+
+        
+
+    def _log_preview(self, trainer:Trainer, pl_module, tag_prefix: str, prompts:list):
+        """generate a preview into tensorboard's log """
+        # logger = getattr(trainer, "logger", None)
+        logger = trainer.logger
+        if logger is None or not hasattr(logger, "experiment"):
+            return
+        writer = logger.experiment
+
+        pl_module.eval()
+
+        with torch.no_grad():
+            # previews = self.example_generator(
+            #     prompts
+            # )
+            previews = self.render_fn(prompts)
+
+        global_step = trainer.global_step
+        for i, (wave, sr, txt, maybe_pm) in enumerate(previews):
+            # log audio & text as before...
+            writer.add_audio(f"preview/{i+1}/audio", wave, global_step=global_step, sample_rate=sr)
+            # should have a dict with prompt and gen keys
+            assert type(txt) == dict, f"expected a dict in the txt field"
+            assert 'prompt' in txt.keys(), f"Need a prompt field"
+            assert 'gen' in txt.keys(), f"need a gen field"
+            txt = txt['prompt'] + txt['gen']
+            # print(txt)
+            writer.add_text(f"preview/{i+1}/text", txt, global_step=global_step)
+            # here's where pretty_midi figure would come in
+            if maybe_pm is not None:
+                fig = pretty_midi_to_fig(maybe_pm)
+                writer.add_figure(f"preview/{i+1}/pianoroll", fig, global_step=global_step)
+                plt.close(fig)
+    
+
+    # def default_render_fn(self, pl_module, prompts):
+    #     """
+    #     Default behavior: generate text via LM, convert to MIDI (if you have a text→MIDI path),
+    #     else you could skip maybe_pm.
+    #     Return list of tuples: (waveform, sample_rate, text_output, pretty_midi_obj_or_None)
+    #     """
+    #     print(f"render callback - render func. Prompt 1 len: {len(prompts[0])}")
+    #     previews = []
+    #     tokenizer = pl_module.tokenizer
+    #     model = pl_module.model
+    #     device = pl_module.device
+    #     max_new = getattr(pl_module, "max_new_tokens", 64)
+    #     # iterate over the prompts
+    #     # pass into the model, detokenise output
+    #     # then render output to different formats for tensoboard logging
+    #     for p in prompts:
+    #         enc = tokenizer(p, return_tensors="pt", truncation=True, max_length=512).to(device)
+    #         with torch.no_grad():
+    #             out_ids = model.generate(**enc, max_new_tokens=max_new, do_sample=False)
+    #         gen_text = tokenizer.decode(out_ids[0], skip_special_tokens=True)
+
+    #         with tempfile.NamedTemporaryFile(suffix=".mid", delete=False) as tmp:
+    #             tmp_path = tmp.name
+    #         # try:
+    #         njam_to_midi(gen_text, tmp_path)
+    #         assert os.path.exists(tmp_path), f"MIDI render failed for some reason."
+    #         print(f'Wrote midi file to {tmp_path}')
+    #         # tmp_path = 'jazz.mid'
+    #         pm = midi_to_pretty_midi(tmp_path)
+    #         wave, sr = pretty_midi_to_audio(pm)
+    #         # finally:
+    #         #     # clean up even if parsing fails
+    #         #     try:
+    #         #         os.remove(tmp_path)
+    #         #     except OSError:
+    #         #         pass
+    #         txt = {"prompt": p, "gen": gen_text}
+    #         txt = json.dumps(txt)
+    #         previews.append((wave.cpu(), sr, txt, pm))
+    #     return previews
+
+
 
 
 
@@ -346,26 +700,6 @@ def autoscale_batch_size_mps_safe(lit_module, datamodule, accelerator, devices, 
     # tmpdir (and the .ckpt inside) is removed here
     return new_bs
 
-# def autoscale_batch_size_mps_safe(lit_module, datamodule, accelerator, devices, precision):
-#     tune_trainer = Trainer(
-#         accelerator=accelerator,
-#         devices=devices,
-#         precision=precision,
-#         num_sanity_val_steps=0,
-#         max_epochs=1,
-#         limit_train_batches=2,
-#         limit_val_batches=0,
-#         enable_checkpointing=False,
-#         logger=False,
-#     )
-#     tuner = Tuner(tune_trainer)
-#     new_bs = tuner.scale_batch_size(
-#         lit_module, datamodule=datamodule, mode="power", steps_per_trial=1,
-#         init_val=max(1, datamodule.batch_size // 2), max_trials=6, batch_arg_name="batch_size",
-#     )
-#     if getattr(torch.backends, "mps", None) and torch.backends.mps.is_available():
-#         torch.mps.empty_cache()
-#     return new_bs
 
 def load_model_no_cache(hf_repo, size_b, trust_remote_code):
     # LOG.info(f"Loading tokenizer: {hf_repo}")
@@ -588,71 +922,6 @@ class WindowTextDataset(Dataset):
         labels = input_ids.clone()
         labels[attention_mask == 0] = -100
         return {"input_ids": input_ids, "attention_mask": attention_mask, "labels": labels}
-
-# class TrainIterableDataset(IterableDataset):
-#     """
-#     An IterableDataset for training language models on windowed text data.
-
-#     Args:
-#         files (Iterable[str or Path]): List of file paths containing text data.
-#         tok_name_or_path (str): Name or path of the tokenizer to use.
-#         tok_kwargs (dict): Additional keyword arguments for tokenizer initialization.
-#         want_ctx_size (int): Maximum sequence length for tokenization.
-#         context (int): Number of previous lines to include as context for each window.
-#         shuffle_files (bool, optional): Whether to shuffle the file order for each epoch. Defaults to True.
-
-#     Yields:
-#         dict: A dictionary containing:
-#             - "input_ids" (torch.LongTensor): Token IDs for the input sequence.
-#             - "attention_mask" (torch.LongTensor): Attention mask for the input sequence.
-#             - "labels" (torch.LongTensor): Token IDs used as labels for training.
-
-#     Notes:
-#         - Each yielded sample consists of `context` previous lines and the current line, joined together.
-#         - Tokenization is performed with truncation and padding to `want_ctx_size`.
-#         - Supports multi-worker data loading via PyTorch DataLoader.
-#     """
-#     """"""
-#     def __init__(self, files, tok_name_or_path: str, tok_kwargs: dict,
-#                  want_ctx_size: int, context: int, shuffle_files: bool = True):
-#         super().__init__()
-#         self.files = list(files)
-#         self.tok_name_or_path = tok_name_or_path
-#         self.tok_kwargs = tok_kwargs
-#         self.want_ctx_size = want_ctx_size
-#         self.context = context
-#         self.shuffle_files = shuffle_files
-#         self._tok = None
-
-#     def _tokenizer(self):
-#         if self._tok is None:
-#             self._tok = AutoTokenizer.from_pretrained(self.tok_name_or_path, **self.tok_kwargs)
-#             if self._tok.pad_token is None:
-#                 self._tok.pad_token = self._tok.eos_token or self._tok.cls_token
-#         return self._tok
-
-#     def _yield_windows_from_file(self, path: Path):
-#         lines = safe_read_lines(path)
-#         for i in range(self.context, len(lines)):
-#             yield "\n".join(lines[i-self.context:i] + [lines[i]])
-
-#     def __iter__(self):
-#         rng = random.Random(torch.initial_seed() % (2**32))
-#         worker = get_worker_info()
-#         file_iter = self.files if worker is None else self.files[worker.id :: worker.num_workers]
-#         file_iter = list(file_iter)
-#         if self.shuffle_files:
-#             rng.shuffle(file_iter)
-#         tok = self._tokenizer()
-#         for p in file_iter:
-#             for text in self._yield_windows_from_file(p):
-#                 enc = tok(text, truncation=True, max_length=self.want_ctx_size, padding="max_length")
-#                 yield {
-#                     "input_ids": torch.tensor(enc["input_ids"], dtype=torch.long),
-#                     "attention_mask": torch.tensor(enc["attention_mask"], dtype=torch.long),
-#                     "labels": torch.tensor(enc["input_ids"], dtype=torch.long),
-#                 }
-
 
 
 
