@@ -883,7 +883,9 @@ class SimpleDataModule(L.LightningDataModule):
             if self._train_files is None:
                 train_files = find_text_files(train_root)
                 assert len(train_files) > 0, "No training files found"
-                self._train_files = train_files
+                # If you are here and you are having problems getting it to run with a given dataset
+                # I found that 47 files was the magic number. No idea why. and no time to find out. life is strange. 
+                self._train_files = train_files # at least 47 needed. 
                 print(f"SimpleDataModule:: setup about to train - using {len(train_files)} training data files")
             if self._val_ds is None:
                 self.setup(stage="validate")
