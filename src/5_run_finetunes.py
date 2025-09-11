@@ -103,7 +103,6 @@ class CausalLMModule(L.LightningModule):
     def validation_step(self, batch, batch_idx):
         out = self.model(**batch)
         val_loss = out.loss
-        print(f"Validation step called, val_loss={val_loss.item()}")
         self.log("val_loss", val_loss, on_step=True, on_epoch=True, prog_bar=True)
         return val_loss
 
@@ -328,41 +327,14 @@ def run_for_model(model_cfg: Dict[str, Any], args: argparse.Namespace, global_ou
             
     LOG.info(f"Chose batch size {datamodule.batch_size}")
 
-    # Full validation BEFORE training (beyond sanity val)
-    # LOG.info("Running initial full validation...")
-    # # try:
-    # trainer.validate(lit_module, datamodule=datamodule, verbose=False)
-    # # except Exception as e:
-    #     # LOG.warning(f"Initial validation encountered an issue (continuing): {e}")
-
-    # LOG.info("Validation complete...")
-
     # Train with OOM fallback (halve batch size until it fits)
     bs = datamodule.batch_size
-    while bs > 0:
-        try:
-            LOG.info(f"Starting training with batch_size={bs}")
-            trainer.fit(lit_module, datamodule=datamodule, ckpt_path=None) # no ckpt by default to avoid it finding the ones created in batch size estimation
-            break
-        except RuntimeError as e:
-            msg = str(e).lower()
-            if "out of memory" in msg or "cuda error" in msg:
-                LOG.warning(f"OOM at batch_size={bs}. Reducing by half and retrying...")
-                bs //= 2
-                if bs < 1:
-                    LOG.error("Cannot reduce batch size further. Aborting for this model.")
-                    break
-                datamodule.batch_size = bs
-                if torch.cuda.is_available():
-                    torch.cuda.empty_cache()
-            else:
-                LOG.error(f"Runtime error during training: {e}")
-                LOG.debug(traceback.format_exc())
-                break
-        except Exception as e:
-            LOG.error(f"Unexpected error during training: {e}")
-            LOG.debug(traceback.format_exc())
-            break
+    if bs > 0:
+        LOG.info(f"Starting training with batch_size={bs}")
+        trainer.fit(lit_module, datamodule=datamodule, ckpt_path=None) # no ckpt by default to avoid it finding the ones created in batch size estimation
+    else:
+        LOG.info(f"Batch size came out at zero for {hf_repo} to not gonna run it")
+
 
     LOG.info("Training complete.")
     try:
@@ -370,21 +342,6 @@ def run_for_model(model_cfg: Dict[str, Any], args: argparse.Namespace, global_ou
         LOG.info(f"Best checkpoint: {ckpt if ckpt else 'none'}")
     except Exception:
         pass
-
-
-# --------------------
-# Config parsing & validation
-# --------------------
-# def load_and_validate_config(config_path: Path) -> Dict[str, Any]:
-#     assert config_path.exists(), f"Config not found: {config_path}"
-#     with config_path.open("r", encoding="utf-8") as f:
-#         cfg = json.load(f)
-#     assert "models" in cfg and isinstance(cfg["models"], list), 'Config must contain key "models" (list).'
-#     for m in cfg["models"]:
-#         assert "hf_repo" in m and "size_b" in m, 'Each model requires "hf_repo" and "size_b"'
-#         if "trust_remote_code" not in m:
-#             m["trust_remote_code"] = False
-#     return cfg
 
 
 # --------------------
@@ -467,12 +424,7 @@ def main():
     for m in cfg["models"]:
             
         LOG.info(f"=== Model: {m['hf_repo']} (size {m['size_b']}) ===")
-        # try:
         run_for_model(m, args, out_root)
-        # except Exception as e:
-        #     LOG.error(f"Fatal error for model {m['hf_repo']}: {e}")
-        #     LOG.debug(traceback.format_exc())
-        #     LOG.info("Continuing to next model...")
 
     LOG.info("All done.")
 

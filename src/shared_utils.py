@@ -882,9 +882,10 @@ class SimpleDataModule(L.LightningDataModule):
         if stage in (None, "fit"):
             if self._train_files is None:
                 train_files = find_text_files(train_root)
-                assert len(train_files) > 0, "No training files found"
                 # If you are here and you are having problems getting it to run with a given dataset
+                # I wanted a minimal dataset to check my full epoch code and that lead me to investigate this!
                 # I found that 47 files was the magic number. No idea why. and no time to find out. life is strange. 
+                assert len(train_files) > 46, "You have too few training files in your training folder. Weirdly, I want 47 or more"
                 self._train_files = train_files # at least 47 needed. 
                 print(f"SimpleDataModule:: setup about to train - using {len(train_files)} training data files")
             if self._val_ds is None:
