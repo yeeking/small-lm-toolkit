@@ -274,13 +274,22 @@ class HFPreviewResponder:
 class PreviewAudioCallback(Callback):
     def __init__(
         self,
-        prompts, 
+        prompt_files,
+        prompt_lines,  
         render_fn: Optional[Callable] = None,
         every_n_steps:int = 0, 
         every_n_epochs: int = 1,
         max_secs: float = 8.0,
     ):
         super().__init__()
+
+        prompts = []
+        for fname in prompt_files:
+            assert os.path.exists(fname), f"Trying to setup training output previews but {fname} does not exist"
+            print(f"PreviewAudioCallback loading file {fname}")
+            with open(fname) as f:
+                prompts.append("\n".join(f.read().split('\n')[0:prompt_lines]))
+
         self.prompts = prompts
         self.every_n_epochs = every_n_epochs
         self.max_secs = max_secs
@@ -300,7 +309,7 @@ class PreviewAudioCallback(Callback):
         if self.every_n_steps <= 0: return
         if trainer.global_step % self.every_n_steps != 0: return
         print(f"Preview gen callback rendering... {trainer.global_step}")
-
+        # print(self.prompts)
         self._log_preview(trainer, pl_module, tag_prefix="train", prompts=self.prompts)
 
     # @rank_zero_only
@@ -323,9 +332,6 @@ class PreviewAudioCallback(Callback):
         pl_module.eval()
 
         with torch.no_grad():
-            # previews = self.example_generator(
-            #     prompts
-            # )
             previews = self.render_fn(prompts)
 
         global_step = trainer.global_step
@@ -336,7 +342,8 @@ class PreviewAudioCallback(Callback):
             assert type(txt) == dict, f"expected a dict in the txt field"
             assert 'prompt' in txt.keys(), f"Need a prompt field"
             assert 'gen' in txt.keys(), f"need a gen field"
-            txt = txt['prompt'] + txt['gen']
+            # txt = txt['prompt'] + txt['gen']
+            txt = txt['gen']
             # print(txt)
             writer.add_text(f"preview/{i+1}/text", txt, global_step=global_step)
             # here's where pretty_midi figure would come in
@@ -345,50 +352,6 @@ class PreviewAudioCallback(Callback):
                 writer.add_figure(f"preview/{i+1}/pianoroll", fig, global_step=global_step)
                 plt.close(fig)
     
-
-    # def default_render_fn(self, pl_module, prompts):
-    #     """
-    #     Default behavior: generate text via LM, convert to MIDI (if you have a text→MIDI path),
-    #     else you could skip maybe_pm.
-    #     Return list of tuples: (waveform, sample_rate, text_output, pretty_midi_obj_or_None)
-    #     """
-    #     print(f"render callback - render func. Prompt 1 len: {len(prompts[0])}")
-    #     previews = []
-    #     tokenizer = pl_module.tokenizer
-    #     model = pl_module.model
-    #     device = pl_module.device
-    #     max_new = getattr(pl_module, "max_new_tokens", 64)
-    #     # iterate over the prompts
-    #     # pass into the model, detokenise output
-    #     # then render output to different formats for tensoboard logging
-    #     for p in prompts:
-    #         enc = tokenizer(p, return_tensors="pt", truncation=True, max_length=512).to(device)
-    #         with torch.no_grad():
-    #             out_ids = model.generate(**enc, max_new_tokens=max_new, do_sample=False)
-    #         gen_text = tokenizer.decode(out_ids[0], skip_special_tokens=True)
-
-    #         with tempfile.NamedTemporaryFile(suffix=".mid", delete=False) as tmp:
-    #             tmp_path = tmp.name
-    #         # try:
-    #         njam_to_midi(gen_text, tmp_path)
-    #         assert os.path.exists(tmp_path), f"MIDI render failed for some reason."
-    #         print(f'Wrote midi file to {tmp_path}')
-    #         # tmp_path = 'jazz.mid'
-    #         pm = midi_to_pretty_midi(tmp_path)
-    #         wave, sr = pretty_midi_to_audio(pm)
-    #         # finally:
-    #         #     # clean up even if parsing fails
-    #         #     try:
-    #         #         os.remove(tmp_path)
-    #         #     except OSError:
-    #         #         pass
-    #         txt = {"prompt": p, "gen": gen_text}
-    #         txt = json.dumps(txt)
-    #         previews.append((wave.cpu(), sr, txt, pm))
-    #     return previews
-
-
-
 
 
 def load_and_validate_config(config_path: Path) -> Dict[str, Any]:
@@ -1129,18 +1092,13 @@ class SimpleDataModule(L.LightningDataModule):
         assert train_root.exists(), f"Training directory not found: {train_root}"
         assert val_root.exists(),   f"Validation directory not found: {val_root}"
 
-        # def powers_of_two(min_ctx: int, max_ctx: int):
-        #     k0 = math.ceil(math.log2(max(1, min_ctx)))
-        #     k1 = math.floor(math.log2(max(1, max_ctx)))
-        #     return [1 << k for k in range(k0, k1 + 1)]
-        
-
         ## some notes on the validation dataset
         ## I wanted to have different sizes of 'context' input
         ## in the validation set and I want to do that over a few different files
         if stage in (None, "validate"):
             if self._val_ds is None:
                 val_files = find_text_files(val_root)
+                self.val_files = val_files # so we can query them later...
                 assert len(val_files) > 0, "No validation files found"
 
                 # Use the middlep2window dataset which is designed for validation datasets

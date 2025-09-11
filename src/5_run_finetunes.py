@@ -293,7 +293,9 @@ def run_for_model(model_cfg: Dict[str, Any], args: argparse.Namespace, global_ou
         ),
         # generates previews during training 
         shared_utils.PreviewAudioCallback(
-            prompts=["what is the capital of paris? "], 
+            prompt_files=[datamodule.val_files[0]], 
+            prompt_lines=datamodule.lines_in_ctx[-1], # -1 is the largest context size
+            # prompts=["what is the capital of paris? "], 
             render_fn=example_renderer, 
             every_n_epochs=1,  
             every_n_steps=1
