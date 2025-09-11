@@ -268,13 +268,21 @@ def run_for_model(model_cfg: Dict[str, Any], args: argparse.Namespace, global_ou
     callbacks = [
         LearningRateMonitor(logging_interval="step"),
         EarlyStopping(monitor="val_loss", mode="min", patience=args.early_stopping_patience),
+        # Best checkpoint callback
         ModelCheckpoint(
             monitor="val_loss",
             mode="min",
             save_top_k=1,
-            dirpath=str(ckpt_dir),            # <<— inside version_X
-            # dirpath=str(outdir / "checkpoints"),
-            filename="{epoch:02d}-{val_loss:.4f}",
+            dirpath=str(ckpt_dir),
+            filename="best-{epoch:02d}-{val_loss:.4f}",
+        ),
+        # Periodic checkpoint callback
+        ModelCheckpoint(
+            dirpath=str(ckpt_dir),
+            filename="epoch-{epoch:02d}",
+            every_n_epochs=args.save_ckpt_every,
+            save_top_k=-1,  # Keep all checkpoints
+            save_on_train_epoch_end=True,
         ),
     ]
 
@@ -388,6 +396,8 @@ def parse_args():
     p.add_argument("--out_dir", type=str, default="./runs", help="Output root directory")
     p.add_argument("--epochs", type=int, default=100)
     p.add_argument("--batch_size", type=int, default=4, help="Starting batch size (may be auto-scaled or reduced on OOM)")    
+    p.add_argument("--save_ckpt_every", type=int, default=10, help="Save checkpoint every N epochs")
+    p.add_argument("--randomise_weights", type=bool, default=False, help="Set to true to randomsze model weights before training")
     # p.add_argument("--auto_scale_bs", action="store_true", help="Use Lightning Tuner to auto-scale batch size")
     p.add_argument("--accumulate_grad_batches", type=int, default=1)
     p.add_argument("--want_ctx_size", type=int, default=2048, help="Max tokens per example")
