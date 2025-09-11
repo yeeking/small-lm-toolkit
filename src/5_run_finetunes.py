@@ -95,7 +95,6 @@ class CausalLMModule(L.LightningModule):
         return self.model(**batch)
 
     def training_step(self, batch, batch_idx):
-        LOG.info("inside training_step")
         out = self.model(**batch)
         loss = out.loss
         self.log("train_loss", loss, on_step=True, on_epoch=False, prog_bar=True)
@@ -109,7 +108,6 @@ class CausalLMModule(L.LightningModule):
         return val_loss
 
     def on_train_start(self):
-        LOG.info(f"on_train_start training starting up. callback metrics: {self.trainer.callback_metrics}")
         if isinstance(self.logger, TensorBoardLogger):
             tb = self.logger.experiment
             tb.add_scalar("model/num_parameters", float(self._param_count), self.global_step)
