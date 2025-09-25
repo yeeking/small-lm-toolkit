@@ -1,5 +1,6 @@
 import json
 import os
+import shared_utils
 
 from transformers import AutoTokenizer, AutoModelForCausalLM
 import torch
@@ -39,6 +40,14 @@ def main():
                 trust_remote_code=trust_remote_code,
             )
             model.eval()
+
+            ## save it somewhere
+            out_folder = f"./models/saved/{shared_utils.get_model_folder(repo, size_b)}"
+            print(f"Saving to folder: {out_folder}")
+            # str(outdir), name=f"size_{size_b}"
+
+            model.save_pretrained(out_folder)
+            tokenizer.save_pretrained(out_folder)
 
             # Assertions to verify objects exist and look sane
             assert tokenizer is not None, f"'tokenizer' not created for {repo}"

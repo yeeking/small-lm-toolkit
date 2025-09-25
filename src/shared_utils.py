@@ -49,6 +49,13 @@ TEXT_EXTS = {".txt", ".md", ".text"}
 
 
 
+def get_model_folder(hf_repo, size_b):
+    """returns a folder name based on the repo and size used to save logs, retrieve saved models etc."""
+    safe_name = hf_repo.replace("/", "__")
+    fname = f"{safe_name}/{size_b}/"
+    return fname
+           
+
 def njam_to_midi(njam_text:str, outfile:str):
     """convert the sent njam string into midi events and save to a file"""
     print(f"Writing a midi file to {outfile}")
@@ -264,7 +271,6 @@ class HFPreviewResponder:
         for prompt, gen_text in zip(prompts, outs):
             with tempfile.NamedTemporaryFile(suffix=".mid", delete=False) as tmp:
                 midipath = tmp.name
-            try:
                 njam_to_midi(gen_text, midipath)
                 pm = midi_to_pretty_midi(midipath)
                 wave, sr = pretty_midi_to_audio(pm, sr=self.cfg.audio_sr)
@@ -272,11 +278,6 @@ class HFPreviewResponder:
                 max_len = int(self.cfg.max_audio_secs * sr)
                 wave = wave[..., :max_len]
                 previews.append((wave.cpu(), sr, {"prompt": prompt, "gen": gen_text, "midi_file":midipath}, pm))
-            finally:
-                try:
-                    os.remove(midipath)
-                except OSError:
-                    pass
 
         return previews
     
@@ -322,17 +323,9 @@ class PreviewAudioCallback(Callback):
         # print(self.prompts)
         self._log_preview(trainer, pl_module, tag_prefix="train", prompts=self.prompts)
 
-    # @rank_zero_only
-    # def on_validation_batch_end(self, trainer, pl_module, outputs, batch, batch_idx, dataloader_idx=0):
-    #     print(f"on_validation_batch_end")
-    #     if trainer.global_step % self.every_n_steps != 0: return
-    #     prompts = prompts_from_batch(batch, pl_module.tokenizer, k=3)
-    #     self._log_preview(trainer, pl_module, tag_prefix="train", prompts=prompts)
-
-        
 
     def _log_preview(self, trainer:Trainer, pl_module, tag_prefix: str, prompts:list):
-        """generate a preview into tensorboard's log """
+        """generate a preview into tensorboard's log and save the generated midi file out"""
         # logger = getattr(trainer, "logger", None)
         logger = trainer.logger
         if logger is None or not hasattr(logger, "experiment"):
@@ -340,7 +333,9 @@ class PreviewAudioCallback(Callback):
         writer = logger.experiment
         run_dir = getattr(logger, "log_dir", None) or getattr(writer, "log_dir", None)
         global_step = trainer.global_step
-        step_dir = os.path.join(run_dir, "previews", f"step_{global_step:09d}")
+        preview_out_dir = os.path.join('./', run_dir, "previews")
+        preview_out_dir = Path(preview_out_dir)
+        preview_out_dir.mkdir(parents=True, exist_ok=True)
 
         pl_module.eval()
 
@@ -362,19 +357,10 @@ class PreviewAudioCallback(Callback):
                 writer.add_figure(f"preview/{i+1}/pianoroll", fig, global_step=global_step)
                 plt.close(fig)
             source_midi_file = txt['midi_file']
-            shutil.copy2(source_midi_file, os.path.join(step_dir, f"preview_{i}.mid"))
-
-            # save a copy of the midi file to the run folder
-            # midi_src = Path(txt.get("midi_file", ""))
-            # if midi_src.is_file():
-            #     shutil.copy2(midi_src, step_dir / f"preview_{i}.mid")
-
-            # here's where pretty_midi figure would come in
-   
-
-        
-
-
+            # , f"step_{global_step:12d}"
+            shutil.copy2(source_midi_file, os.path.join(preview_out_dir, f"preview_step_{global_step}_{i}.mid"))
+            # we could save 'wave' to an audio file with 
+            # librosa here too ... 
 
 def load_and_validate_config(config_path: Path) -> Dict[str, Any]:
     assert config_path.exists(), f"Config not found: {config_path}"
@@ -685,6 +671,19 @@ def autoscale_batch_size_mps_safe(lit_module, datamodule, accelerator, devices, 
     # tmpdir (and the .ckpt inside) is removed here
     return new_bs
 
+
+def load_model_cache(hf_repo, size_b, trust_remote_code):
+    # LOG.info(f"Loading tokenizer: {hf_repo}")
+    tokenizer = AutoTokenizer.from_pretrained(hf_repo, use_fast=True, trust_remote_code=trust_remote_code)
+
+    # LOG.info(f"Loading model: {hf_repo} (size {size_b})")
+    try:
+        model = AutoModelForCausalLM.from_pretrained(hf_repo, trust_remote_code=trust_remote_code)
+    except Exception as e:
+        # LOG.error(f"Failed to load model {hf_repo}: {e}")
+        return None, None
+    
+    return tokenizer, model
 
 def load_model_no_cache(hf_repo, size_b, trust_remote_code):
     # LOG.info(f"Loading tokenizer: {hf_repo}")
