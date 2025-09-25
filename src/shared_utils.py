@@ -7,6 +7,8 @@ from typing import List, Dict, Any, Tuple, Iterable, Optional, Callable
 # from typing import Iterable, List, Optional, Dict, Any
 import random 
 import math
+import os, shutil
+from pathlib import Path
 
 ## LLM imports
 import torch 
@@ -101,6 +103,7 @@ def pretty_midi_to_fig(pm:pretty_midi.PrettyMIDI):
 
 def pretty_midi_to_audio(pm:pretty_midi.PrettyMIDI, sr:int=16000):
     """render sent pretty_midi object into wonderful music and return raw audio samples"""
+    print(f"pretty_midi_to_audio rendering a midi file with {len(pm.get_onsets())} notes ")
     audio = pm.fluidsynth(fs=sr)  # numpy [T]
     wave = torch.from_numpy(audio).unsqueeze(0)  # [1, T], float
     return wave, sr
@@ -181,7 +184,7 @@ class PreviewGenConfig:
     repetition_penalty: float = 1.0   # >1.0 discourages repeats
     truncate_to: Optional[int] = 1024 # max prompt length tokens (None = no extra truncation)
     return_full_text: bool = False    # if False, only return the continuation (common for previews)
-    audio_sr: int = 16000
+    audio_sr: int = 44100
     max_audio_secs: float = 8.0       # keep TB event files lean
 
 class HFPreviewResponder:
@@ -210,7 +213,7 @@ class HFPreviewResponder:
     def __call__(self, prompts: List[str]) -> List[Tuple[torch.Tensor, int, Dict[str, str], object]]:
         """
         Returns a list of tuples:
-          (waveform [1, T] float in [-1,1], sr, {"prompt": str, "gen": str}, pretty_midi_obj)
+          (waveform [1, T] float in [-1,1], sr, {"prompt": str, "gen": str, "midi_file":path_to_midi_file}, pretty_midi_obj)
 
         Note: we also crop audio to cfg.max_audio_secs.
         """
@@ -259,7 +262,6 @@ class HFPreviewResponder:
         # 4) Convert each output to MIDI → PrettyMIDI → audio/figure
         previews = []
         for prompt, gen_text in zip(prompts, outs):
-            # You already have njam_to_midi → PrettyMIDI → audio/fig machinery.
             with tempfile.NamedTemporaryFile(suffix=".mid", delete=False) as tmp:
                 midipath = tmp.name
             try:
@@ -269,7 +271,7 @@ class HFPreviewResponder:
                 # crop to keep TB small
                 max_len = int(self.cfg.max_audio_secs * sr)
                 wave = wave[..., :max_len]
-                previews.append((wave.cpu(), sr, {"prompt": prompt, "gen": gen_text}, pm))
+                previews.append((wave.cpu(), sr, {"prompt": prompt, "gen": gen_text, "midi_file":midipath}, pm))
             finally:
                 try:
                     os.remove(midipath)
@@ -336,6 +338,9 @@ class PreviewAudioCallback(Callback):
         if logger is None or not hasattr(logger, "experiment"):
             return
         writer = logger.experiment
+        run_dir = getattr(logger, "log_dir", None) or getattr(writer, "log_dir", None)
+        global_step = trainer.global_step
+        step_dir = os.path.join(run_dir, "previews", f"step_{global_step:09d}")
 
         pl_module.eval()
 
@@ -350,16 +355,25 @@ class PreviewAudioCallback(Callback):
             assert type(txt) == dict, f"expected a dict in the txt field"
             assert 'prompt' in txt.keys(), f"Need a prompt field"
             assert 'gen' in txt.keys(), f"need a gen field"
-            # txt = txt['prompt'] + txt['gen']
-            txt = txt['gen']
             # print(txt)
-            writer.add_text(f"preview/{i+1}/text", txt, global_step=global_step)
-            # here's where pretty_midi figure would come in
+            writer.add_text(f"preview/{i+1}/text", txt['gen'], global_step=global_step)
             if maybe_pm is not None:
                 fig = pretty_midi_to_fig(maybe_pm)
                 writer.add_figure(f"preview/{i+1}/pianoroll", fig, global_step=global_step)
                 plt.close(fig)
-    
+            source_midi_file = txt['midi_file']
+            shutil.copy2(source_midi_file, os.path.join(step_dir, f"preview_{i}.mid"))
+
+            # save a copy of the midi file to the run folder
+            # midi_src = Path(txt.get("midi_file", ""))
+            # if midi_src.is_file():
+            #     shutil.copy2(midi_src, step_dir / f"preview_{i}.mid")
+
+            # here's where pretty_midi figure would come in
+   
+
+        
+
 
 
 def load_and_validate_config(config_path: Path) -> Dict[str, Any]:

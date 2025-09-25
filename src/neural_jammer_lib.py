@@ -570,14 +570,10 @@ class NeuralJammerLanguageV2:
         print(f"Extracting valid njam strings - starting with {len(njam_events)}")
         valid_events = []
         for n_str in njam_events:
-            print(f"Event str: {n_str}")
             if len(n_str.strip()) == 0: continue # just ignore blanks
             parts = n_str.split('_')
             assert len(parts) > 4, f"njam event string bad: {n_str}"
-        #     # e.g. 'p_123 c_0' --> parts[0] is 'p'
             n_type = parts[0]
-            print(f"Event type {n_type}")
-        #     # check for valid type
             assert n_type in NeuralJammerLanguageV2.n2sV2_CONVERTERS, f"Unrecognised event {n_type} from {n_str}"
             valid_events.append(n_str)
       
@@ -600,7 +596,7 @@ class NeuralJammerLanguageV2:
                 abs_dtime = now + dtime
                 now = abs_dtime
                 event =  re.sub(r'(w_)\d+', f'w_{now}', event)
-                print(f'fixed relative time to {event}')
+                # print(f'fixed relative time to {event}')
                 # replace the w_x with w_now
                 
             converter = NeuralJammerLanguageV2.n2sV2_CONVERTERS[event_type]
@@ -610,7 +606,7 @@ class NeuralJammerLanguageV2:
             # chan = NeuralJammerLanguageV2.get_njamV2_channel(event)
             # --- do something like score[chan].append(score_event)
             score[1].append(score_event)
-
+        print(f"njam_to_score:: made score with {len(score[1])} events")
         return score          
 
 
