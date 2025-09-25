@@ -672,28 +672,30 @@ def autoscale_batch_size_mps_safe(lit_module, datamodule, accelerator, devices, 
     return new_bs
 
 
-def load_model_cache(hf_repo, size_b, trust_remote_code):
-    # LOG.info(f"Loading tokenizer: {hf_repo}")
-    tokenizer = AutoTokenizer.from_pretrained(hf_repo, use_fast=True, trust_remote_code=trust_remote_code)
-
-    # LOG.info(f"Loading model: {hf_repo} (size {size_b})")
-    try:
-        model = AutoModelForCausalLM.from_pretrained(hf_repo, trust_remote_code=trust_remote_code)
-    except Exception as e:
-        # LOG.error(f"Failed to load model {hf_repo}: {e}")
-        return None, None
-    
-    return tokenizer, model
-
 def load_model_no_cache(hf_repo, size_b, trust_remote_code):
     # LOG.info(f"Loading tokenizer: {hf_repo}")
-    tokenizer = AutoTokenizer.from_pretrained(hf_repo, use_fast=True, trust_remote_code=trust_remote_code)
 
     # LOG.info(f"Loading model: {hf_repo} (size {size_b})")
+    # first try loading from cache
+    model_dir = os.path.join('models', 'saved', get_model_folder(hf_repo, size_b))
+
     try:
-        model = AutoModelForCausalLM.from_pretrained(hf_repo, trust_remote_code=trust_remote_code)
+        tokenizer = AutoTokenizer.from_pretrained(model_dir, use_fast=True, trust_remote_code=trust_remote_code)
+        model = AutoModelForCausalLM.from_pretrained(model_dir, trust_remote_code=trust_remote_code)
+        print(f"load_model_no_cache: loaded model from filesystem yay")
+
+        return tokenizer, model 
     except Exception as e:
-        # LOG.error(f"Failed to load model {hf_repo}: {e}")
+        # LOG.error(f"Failed to load model fr{hf_repo}: {e}")
+        print(f"load_model_no_cache: can't load from an offline save. going via HF tried {model_dir}")
+    try:
+        tokenizer = AutoTokenizer.from_pretrained(hf_repo, use_fast=True, trust_remote_code=trust_remote_code)
+        model = AutoModelForCausalLM.from_pretrained(hf_repo, trust_remote_code=trust_remote_code)
+        print(f"load_model_no_cache: loaded model from HF")
+        return tokenizer, model
+
+    except Exception as e:
+        # LOG.error(f"Failed to load model fr{hf_repo}: {e}")
         return None, None
     
     return tokenizer, model
