@@ -40,15 +40,23 @@ import pretty_midi  # if you choose MIDI rendering; requires fluidsynth/soundfon
 import librosa
 from dataclasses import dataclass
 
+from neural_jammer_lib import NeuralJammerLanguageV2
+from MIDI import score2midi as score_to_midi
+
 TEXT_EXTS = {".txt", ".md", ".text"}
 
 
 
-def njam_to_midi_real(njam_text:str, outfile:str):
-    """convert the sent njam string into midi events and save to a file"""
-    return ""
-
 def njam_to_midi(njam_text:str, outfile:str):
+    """convert the sent njam string into midi events and save to a file"""
+    print(f"Writing a midi file to {outfile}")
+    score = NeuralJammerLanguageV2.njam_to_score(njam_text.split('\n'))
+    midi_raw = score_to_midi(score)
+    with open(outfile, 'wb') as f:
+        f.write(midi_raw)
+
+
+def njam_to_midi_test(njam_text:str, outfile:str):
     """test version of njam to midi that generates a simple midi file"""
     # Create a PrettyMIDI object
     cello_c_chord = pretty_midi.PrettyMIDI()
