@@ -215,6 +215,7 @@ class HFPreviewResponder:
         self.device = pl_module.device
         self.max_audio_secs = max_audio_secs
         self.audio_sr = audio_sr
+        self.max_new_tokens = max_new_tokens
 
         # Reasonable fallbacks for PAD/EOS to avoid generate() complaints.
         # (Some decoder-only models don't have pad_token_id set.)
@@ -250,25 +251,21 @@ class HFPreviewResponder:
 
         Note: we also crop audio to cfg.max_audio_secs.
         """
-        print(f"HFPreviewResponder __call... prompt lens {[len(p) for p in prompts]}")
+        # print(f"HFPreviewResponder __call... prompt lens {[len(p) for p in prompts]}")
         assert len(prompts) == 1, f"You sent more than one prompt but currently only support 1"
         if not prompts:
             return []
 
-        result = self.generator_pipeline(prompts[0])#[0]["generated_text"]
-
-        print(result)
+        print(f"Heres the prompt {prompts[0]}")
+        result = self.generator_pipeline(prompts[0], return_full_text=False)
         outs = [r["generated_text"] for r in result]
 
-        # 4) Convert each output to MIDI → PrettyMIDI → audio/figure
         previews = []
         for prompt, gen_text in zip(prompts, outs):
-            
-            # gen_text = gen_text[len(prompt):-1]
-            # print(f"Prompt: {prompt} and otput: {gen_text}")
             print(f"Length of prompt {len(prompt)} len of output {len(gen_text)}")
+            print(f"here's the output... \n{gen_text}")
             with tempfile.NamedTemporaryFile(suffix=".mid", delete=False) as tmp:
-                print(f"HFPreviewResponder:__call__ about to render... prompt: {prompt} \n\n result: {gen_text}")
+                # print(f"HFPreviewResponder:__call__ about to render... prompt: {prompt} \n\n result: {gen_text}")
                 midipath = tmp.name
                 njam_to_midi(gen_text, midipath)
                 pm = midi_to_pretty_midi(midipath)
@@ -276,7 +273,9 @@ class HFPreviewResponder:
                 # crop to keep TB small
                 max_len = int(self.max_audio_secs * self.audio_sr)
                 wave = wave[..., :max_len]
-                previews.append((wave.cpu(), sr, {"prompt": prompt, "gen": gen_text, "midi_file":midipath}, pm))
+                preview = {"audio":wave.cpu(), "samplerate":sr, "prompt": prompt, "gen_text": gen_text, "midi_file":midipath, "pretty_midi_obj":pm}
+                previews.append(preview)
+                # previews.append((wave.cpu(), sr, {"prompt": prompt, "gen": gen_text, "midi_file":midipath}, pm))
             assert False 
         return previews
     
@@ -288,7 +287,7 @@ class PreviewAudioCallback(Callback):
     def __init__(
         self,
         prompt_files,
-        ctx_len_lines,  
+        max_prompt_len:int = 1024,  
         render_fn: Optional[Callable] = None,
         every_n_steps:int = 0, 
         every_n_epochs: int = 1,
@@ -296,13 +295,14 @@ class PreviewAudioCallback(Callback):
     ):
         super().__init__()
 
+        
         prompts = []
         for fname in prompt_files:
             assert os.path.exists(fname), f"Trying to setup training output previews but {fname} does not exist"
-            print(f"PreviewAudioCallback loading file {fname}")
+            print(f"PreviewAudioCallback loading file {fname} for len: {max_prompt_len}")
             with open(fname) as f:
-                prompts.append("\n".join(f.read().split('\n')[0:ctx_len_lines]))
-
+                prompts.append(f.read()[0:max_prompt_len])
+        
         self.prompts = prompts
         self.every_n_epochs = every_n_epochs
         self.max_secs = max_secs
@@ -344,21 +344,23 @@ class PreviewAudioCallback(Callback):
         with torch.no_grad():
             previews = self.render_fn(prompts)
 
+        # make some assertions about what is in the previews
+        assert len(previews) > 0, f"Previews from render fn look bad..."
+        want_keys = ["audio", "samplerate", "prompt", "gen_text", "midi_file", "pretty_midi_obj"]
+        for p in previews:
+            for k in want_keys: assert k in p.keys(), f"Preview missing key {k}: {p.keys()}"
+                
         global_step = trainer.global_step
-        for i, (wave, sr, txt, maybe_pm) in enumerate(previews):
+        # for i, (wave, sr, txt, maybe_pm) in enumerate(previews):
+        for i, p in enumerate(previews):
             # log audio & text as before...
-            writer.add_audio(f"preview/{i+1}/audio", wave, global_step=global_step, sample_rate=sr)
-            # should have a dict with prompt and gen keys
-            assert type(txt) == dict, f"expected a dict in the txt field"
-            assert 'prompt' in txt.keys(), f"Need a prompt field"
-            assert 'gen' in txt.keys(), f"need a gen field"
-            # print(txt)
-            writer.add_text(f"preview/{i+1}/text", txt['gen'], global_step=global_step)
-            if maybe_pm is not None:
-                fig = pretty_midi_to_fig(maybe_pm)
-                writer.add_figure(f"preview/{i+1}/pianoroll", fig, global_step=global_step)
-                plt.close(fig)
-            source_midi_file = txt['midi_file']
+            writer.add_audio(f"preview/{i+1}/audio", p["audio"], global_step=global_step, sample_rate=p["samplerate"])
+            writer.add_text(f"preview/{i+1}/text", p['gen_text'], global_step=global_step)
+            # if maybe_pm is not None:
+            fig = pretty_midi_to_fig(p["pretty_midi_obj"])
+            writer.add_figure(f"preview/{i+1}/pianoroll", fig, global_step=global_step)
+            plt.close(fig)
+            source_midi_file = p['midi_file']
             # , f"step_{global_step:12d}"
             shutil.copy2(source_midi_file, os.path.join(preview_out_dir, f"preview_step_{global_step}_{i}.mid"))
             # we could save 'wave' to an audio file with 
