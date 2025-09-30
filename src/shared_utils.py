@@ -191,99 +191,6 @@ def _find_first_marker(text: str, markers: List[str]) -> Optional[int]:
     return min(idxs) if idxs else None
 
 
-
-# class HFPreviewResponder:
-#     """
-#     render_function you can pass to a custom trainer callback.
-#     It uses the HF model/tokenizer inside your LightningModule to generate
-#     batched continuations for string prompts, then converts them to
-#     MIDI/PrettyMIDI/audio/figure via your existing helpers.
-#     """
-#     def __init__(self, pl_module,
-#                 max_new_tokens: int,
-#                 do_sample: bool = True,           # set True for stochastic decoding
-#                 temperature: float = 0.8,
-#                 top_p: float = 0.95,
-#                 top_k: int = 50,
-#                 # num_beams: int = 1,
-#                 repetition_penalty: float = 1.1,   # >1.0 discourages repeats
-#                 # truncate_to: Optional[int] = 1024, # max prompt length tokens (None = no extra truncation)
-#                 # return_full_text: bool = False,    # if False, only return the continuation (common for previews)
-#                 audio_sr: int = 44100,
-#                 max_audio_secs: float = 8.0       # keep TB event files lean
-
-#     ):
-                 
-#                 #   gen_cfg: PreviewGenConfig = PreviewGenConfig()):
-#         self.pl_module = pl_module
-#         self.model = pl_module.model
-#         self.tokenizer = pl_module.tokenizer
-#         self.device = pl_module.device
-#         self.max_audio_secs = max_audio_secs
-#         self.audio_sr = audio_sr
-#         self.max_new_tokens = max_new_tokens
-
-#         # Reasonable fallbacks for PAD/EOS to avoid generate() complaints.
-#         # (Some decoder-only models don't have pad_token_id set.)
-#         if self.tokenizer.pad_token_id is None:
-#             # safest fallback is EOS as PAD for decoder-only LMs
-#             self.tokenizer.pad_token = self.tokenizer.eos_token
-
-#         self.eos_id = self.tokenizer.eos_token_id
-#         self.pad_id = self.tokenizer.pad_token_id
-
-# # Some models don’t have a pad token; set it to eos to avoid warnings/errors
-#         if self.tokenizer.pad_token_id is None and self.tokenizer.eos_token_id is not None:
-#             self.tokenizer.pad_token = self.tokenizer.eos_token
-
-#         self.generator_pipeline = pipeline(
-#             task="text-generation",
-#             model=self.model,
-#             tokenizer=self.tokenizer,
-#             do_sample=do_sample,           # set False for greedy / deterministic
-#             temperature=temperature,
-#             top_p=top_p,
-#             top_k=top_k, 
-#             repetition_penalty=repetition_penalty,
-#             max_new_tokens=max_new_tokens,
-#         )
-
-
-#     @torch.inference_mode()
-#     def __call__(self, prompts: List[str]) -> List[Tuple[torch.Tensor, int, Dict[str, str], object]]:
-#         """
-#         Returns a list of tuples:
-#           (waveform [1, T] float in [-1,1], sr, {"prompt": str, "gen": str, "midi_file":path_to_midi_file}, pretty_midi_obj)
-
-#         Note: we also crop audio to cfg.max_audio_secs.
-#         """
-#         # print(f"HFPreviewResponder __call... prompt lens {[len(p) for p in prompts]}")
-#         assert len(prompts) == 1, f"You sent more than one prompt but currently only support 1"
-#         if not prompts:
-#             return []
-
-#         result = self.generator_pipeline(prompts[0], return_full_text=False)
-#         outs = [r["generated_text"] for r in result]
-
-#         previews = []
-#         for prompt, gen_text in zip(prompts, outs):
-#             print(f"Length of prompt {len(prompt)} len of output {len(gen_text)}")
-#             # print(f"here's the output... \n{gen_text}")
-#             with tempfile.NamedTemporaryFile(suffix=".mid", delete=False) as tmp:
-#                 # print(f"HFPreviewResponder:__call__ about to render... prompt: {prompt} \n\n result: {gen_text}")
-#                 midipath = tmp.name
-#                 njam_to_midi(gen_text, midipath)
-#                 pm = midi_to_pretty_midi(midipath)
-#                 wave, sr = pretty_midi_to_audio(pm, sr=self.audio_sr)
-#                 # crop to keep TB small
-#                 max_len = int(self.max_audio_secs * self.audio_sr)
-#                 wave = wave[..., :max_len]
-#                 preview = {"audio":wave.cpu(), "samplerate":sr, "prompt": prompt, "gen_text": gen_text, "midi_file":midipath, "pretty_midi_obj":pm}
-#                 previews.append(preview)
-#                 # previews.append((wave.cpu(), sr, {"prompt": prompt, "gen": gen_text, "midi_file":midipath}, pm))
-#         return previews
-    
-
 class PreviewAudioCallback(Callback):
     """Training callback that passes a set of prompts to the model, autoregresses a few steps then converts output to MIDI and audio
     which is saved to the  previews folder for this run
@@ -447,7 +354,11 @@ class PreviewAudioCallback(Callback):
             plt.close(fig)
             source_midi_file = p['midi_file']
             # , f"step_{global_step:12d}"
-            shutil.copy2(source_midi_file, os.path.join(preview_out_dir, f"preview_step_{global_step}_{i}.mid"))
+            out_midi_file = os.path.join(preview_out_dir, f"preview_step_{global_step}_{i}.mid")
+            out_txt_file = os.path.join(preview_out_dir, f"preview_step_{global_step}_{i}.txt")
+            shutil.copy2(source_midi_file, out_midi_file)
+            with open(out_txt_file, 'w') as f:
+                f.write(f"{p['prompt']} \n\n {p['gen_text']}") 
             # we could save 'wave' to an audio file with 
             # librosa here too ... 
 
@@ -1368,7 +1279,7 @@ class CausalLMModule(L.LightningModule):
 
     def on_validation_epoch_end(self):
         # Perplexity from aggregated val_loss
-        LOG.info(f"Validation epoch ended - running additional evaluations")
+        # LOG.info(f"Validation epoch ended - running additional evaluations")
 
         val_loss = self.trainer.callback_metrics.get("val_loss")
         if val_loss is not None:
@@ -1382,36 +1293,36 @@ class CausalLMModule(L.LightningModule):
 
         # Sample generations for a few validation prompts
         dm = self.trainer.datamodule
-        if not isinstance(dm, shared_utils.SimpleDataModule) or not dm.val_preview_texts:
+        if not isinstance(dm, SimpleDataModule) or not dm.val_preview_texts:
             return
-        try:
-            self.model.eval()
-            samples = []
-            for i, prompt_text in enumerate(dm.val_preview_texts):
-                enc = self.tokenizer(
-                    prompt_text,
-                    return_tensors="pt",
-                    truncation=True,
-                    max_length=dm.want_ctx_size,
+        # try:
+        self.model.eval()
+        samples = []
+        for i, prompt_text in enumerate(dm.val_preview_texts):
+            enc = self.tokenizer(
+                prompt_text,
+                return_tensors="pt",
+                truncation=True,
+                max_length=dm.want_ctx_size,
+            )
+            enc = {k: v.to(self.device) for k, v in enc.items()}
+
+            with torch.no_grad():
+                gen_ids = self.model.generate(
+                    **enc,
+                    max_new_tokens=self.max_new_tokens,
+                    do_sample=False,
+                    pad_token_id=self.tokenizer.pad_token_id,
+                    eos_token_id=self.tokenizer.eos_token_id,
                 )
-                enc = {k: v.to(self.device) for k, v in enc.items()}
+            gen_text = self.tokenizer.decode(gen_ids[0], skip_special_tokens=True)
+            samples.append(f"### Prompt {i+1}\n{prompt_text}\n\n### Output {i+1}\n{gen_text}\n")
 
-                with torch.no_grad():
-                    gen_ids = self.model.generate(
-                        **enc,
-                        max_new_tokens=self.max_new_tokens,
-                        do_sample=False,
-                        pad_token_id=self.tokenizer.pad_token_id,
-                        eos_token_id=self.tokenizer.eos_token_id,
-                    )
-                gen_text = self.tokenizer.decode(gen_ids[0], skip_special_tokens=True)
-                samples.append(f"### Prompt {i+1}\n{prompt_text}\n\n### Output {i+1}\n{gen_text}\n")
-
-            if isinstance(self.logger, TensorBoardLogger):
-                self.logger.experiment.add_text("samples", "\n".join(samples), self.global_step)
-        except Exception as e:
-            LOG.warning(f"Sample generation failed: {e}")
-        LOG.info(f"Validation epoch ended - additional evaluations complete")
+        if isinstance(self.logger, TensorBoardLogger):
+            self.logger.experiment.add_text("samples", "\n".join(samples), self.global_step)
+        # except Exception as e:
+            # LOG.warning(f"Sample generation failed: {e}")
+        # LOG.info(f"Validation epoch ended - additional evaluations complete")
 
 
     def configure_optimizers(self):

@@ -12,7 +12,7 @@ from transformers import pipeline
 
 
 
-def main(prompt):
+def main(prompt_files):
     # Path to your JSON file
     JSON_PATH = "./data/models_plan.json"
     assert os.path.exists(JSON_PATH), f"Cannot find JSON data file {JSON_PATH}"
@@ -56,7 +56,6 @@ def main(prompt):
         )
 
         # [PosixPath("data/pijama-mini/validation/'Round Midnight - Live At Maybeck Recital Hall, Berkeley, CA  April 1990.txt")]
-        prompt_files=["data/pijama-mini/validation/'Round Midnight - Live At Maybeck Recital Hall, Berkeley, CA  April 1990.txt"]
         
         render_callback = shared_utils.PreviewAudioCallback(
             prompt_files=prompt_files,
@@ -70,8 +69,11 @@ def main(prompt):
             repetition_penalty = 1.1   # >1.0 discourages repeats
         )
         
-        
-        previews = render_callback.render_previews()
+        try:        
+            previews = render_callback.render_previews()
+        except:
+            print(f"[FAIL] Preview gen crashed for {repo} {size_b} ... skipping to next one")
+            continue
         # print(previews)   
         # now what you gonna do with them there previews bud?
         # how about this brother?
@@ -104,17 +106,9 @@ def main(prompt):
 
 if __name__ == "__main__":
 
+    prompt_files=["data/pijama-mini/validation/'Round Midnight - Live At Maybeck Recital Hall, Berkeley, CA  April 1990.txt"]
 
     # main(prompt)
-    main("ignore_me")
+    main(prompt_files)
     
-
-## load model config
-
-## iterate over loading models
-
-## generate output from a prompt and print it out 
-
-
-
 
