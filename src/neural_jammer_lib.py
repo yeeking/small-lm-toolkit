@@ -567,46 +567,48 @@ class NeuralJammerLanguageV2:
         """
 
         # filter out invalid ones
-        print(f"Extracting valid njam strings - starting with {len(njam_events)}")
-        valid_events = []
-        for n_str in njam_events:
-            if len(n_str.strip()) == 0: continue # just ignore blanks
-            parts = n_str.split('_')
-            assert len(parts) > 4, f"njam event string bad: {n_str}"
-            n_type = parts[0]
-            assert n_type in NeuralJammerLanguageV2.n2sV2_CONVERTERS, f"Unrecognised event {n_type} from {n_str}"
-            valid_events.append(n_str)
-      
-        njam_events = valid_events
-      
-        print(f"Got {len(njam_events)} njam events after processing")
+        print(f"Extracting valid njam strings - starting with {len(njam_events)} events")
+        # valid_events = []
+        # for n_str in njam_events:
+        #     if len(n_str.strip()) == 0: continue # just ignore blanks
+        #     parts = n_str.split('_')
+        #     assert len(parts) > 4, f"njam event string bad: {n_str}"
+        #     n_type = parts[0]
+        #     assert n_type in NeuralJammerLanguageV2.n2sV2_CONVERTERS, f"Unrecognised event {n_type} from {n_str}"
+        #     valid_events.append(n_str)
+        # njam_events = valid_events      
+        # print(f"Got {len(njam_events)} njam events after processing")
 
         score = [ticks_per_quarter, []]
 
         now = 0
         for event in njam_events:
-            # event_type = event[0]
-            event_type = event[0].split('_', 1)[0]
-            # if event_type in NeuralJammerLanguageV2.n2sV2_CONVERTERS:   
-            if relative_time: # incoming w_times are relative not absolute, so convert to absolute
-                # fix the dtime from njam 'waitfor' format to absolute offset
-                dtime = NeuralJammerLanguageV2.get_njamV2_dtime(event.split('_')[-1])
+            try:
+                # event_type = event[0]
+                event_type = event[0].split('_', 1)[0]
+                # if event_type in NeuralJammerLanguageV2.n2sV2_CONVERTERS:   
+                if relative_time: # incoming w_times are relative not absolute, so convert to absolute
+                    # fix the dtime from njam 'waitfor' format to absolute offset
+                    dtime = NeuralJammerLanguageV2.get_njamV2_dtime(event.split('_')[-1])
+                    
+                    # if dtime == 0: dtime = 1
+                    abs_dtime = now + dtime
+                    now = abs_dtime
+                    event =  re.sub(r'(w_)\d+', f'w_{now}', event)
+                    # print(f'fixed relative time to {event}')
+                    # replace the w_x with w_now
                 
-                # if dtime == 0: dtime = 1
-                abs_dtime = now + dtime
-                now = abs_dtime
-                event =  re.sub(r'(w_)\d+', f'w_{now}', event)
-                # print(f'fixed relative time to {event}')
-                # replace the w_x with w_now
+                converter = NeuralJammerLanguageV2.n2sV2_CONVERTERS[event_type]
+                score_event = converter(event)
                 
-            converter = NeuralJammerLanguageV2.n2sV2_CONVERTERS[event_type]
-            score_event = converter(event)
-            
-            # might use channel to create multiple score tracks later
-            # chan = NeuralJammerLanguageV2.get_njamV2_channel(event)
-            # --- do something like score[chan].append(score_event)
-            score[1].append(score_event)
-        print(f"njam_to_score:: made score with {len(score[1])} events")
+                # might use channel to create multiple score tracks later
+                # chan = NeuralJammerLanguageV2.get_njamV2_channel(event)
+                # --- do something like score[chan].append(score_event)
+                score[1].append(score_event)
+            except:
+                # parse error
+                print(f"njam_to_score: skipping event string '{event[0:10]}'...")
+        print(f"njam_to_score:: made score with {len(score[1])} events from possible {len(njam_events)}")
         return score          
 
 

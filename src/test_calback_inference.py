@@ -1,13 +1,15 @@
 ## Tests the shared_utils sample renderer
 
 import json
-import os
+import os, shutil
+
 import shared_utils
 
 # from transformers import AutoTokenizer, AutoModelForCausalLM
 import torch
 import shared_utils
 from transformers import pipeline
+
 
 
 def main(prompt):
@@ -20,8 +22,6 @@ def main(prompt):
         data = json.load(f)
 
     assert "models" in data.keys(), f"JSON data loaded but does not have models key - just {data.keys()}"
-
-
 
     models = data["models"]
 
@@ -38,7 +38,6 @@ def main(prompt):
         # try:
         tokenizer, model = shared_utils.load_model_no_cache(repo, size_b, trust_remote_code=True)
 
-        
         # Assertions to verify objects exist and look sane
         assert tokenizer is not None, f"'tokenizer' not created for {repo}"
         assert model is not None, f"'model' not created for {repo}"
@@ -58,21 +57,40 @@ def main(prompt):
 
         # [PosixPath("data/pijama-mini/validation/'Round Midnight - Live At Maybeck Recital Hall, Berkeley, CA  April 1990.txt")]
         prompt_files=["data/pijama-mini/validation/'Round Midnight - Live At Maybeck Recital Hall, Berkeley, CA  April 1990.txt"]
-        prompts = []
-        for fname in prompt_files:
-            assert os.path.exists(fname), f"Trying to setup training output previews but {fname} does not exist"
-            with open(fname) as f:
-                prompts.append(f.read()[0:1024])
-
-        # renders example output from the model during training 
-        audio_preview_render_fn = shared_utils.HFPreviewResponder(smallm_model, 
-            max_new_tokens=512,  # autoregress for this many tokens 
-            do_sample=True,          # or True for sampling previews
+        
+        render_callback = shared_utils.PreviewAudioCallback(
+            prompt_files=prompt_files,
+            max_prompt_len=1024,  
+            pl_module=smallm_model,
+            max_new_tokens= 128,
+            do_sample = True,           # set True for stochastic decoding
+            temperature = 0.8,
+            top_p = 0.95,
+            top_k = 50,
+            repetition_penalty = 1.1   # >1.0 discourages repeats
         )
+        
 
-        previews = audio_preview_render_fn(prompts=prompts)
+        previews = render_callback.render_previews()
+        print(previews)
+        # now what you gonna do with them there previews bud?
+        # how about this brother?
+        preview_out_dir = 'test_preview'
+        for i, p in enumerate(previews):
+            # log audio & text as before...
+            source_midi_file = p['midi_file']
+            # , f"step_{global_step:12d}"
+            if not os.path.exists(preview_out_dir): os.makedirs(preview_out_dir, exist_ok=True)
+            filestub = f"{repo.replace('/', '_')}-{size_b}"
 
-        print(f"[OK] Successfully loaded {repo}")
+            midifile = os.path.join(preview_out_dir, f"{filestub}.mid")
+            print(f"Saving file to {midifile}")
+            shutil.copy2(source_midi_file, midifile)
+            # we could save 'wave' to an audio file with 
+            # librosa here too ...  
+
+
+        print(f"[OK] Successfully rendered with {repo}")
         break
     # except Exception as e:
         #     print(f"[FAIL] Error loading {repo}: {e}")

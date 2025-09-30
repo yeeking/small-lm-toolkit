@@ -53,6 +53,12 @@ from MIDI import score2midi as score_to_midi
 
 TEXT_EXTS = {".txt", ".md", ".text"}
 
+def up_to_last(s: str, sub: str) -> str:
+    """returns sub string of s up to last occrence of sub """
+    idx = s.rfind(sub)
+    if idx == -1:
+        return s 
+    return s[:idx]
 
 
 def get_model_folder(hf_repo, size_b):
@@ -186,29 +192,142 @@ def _find_first_marker(text: str, markers: List[str]) -> Optional[int]:
 
 
 
-class HFPreviewResponder:
+# class HFPreviewResponder:
+#     """
+#     render_function you can pass to a custom trainer callback.
+#     It uses the HF model/tokenizer inside your LightningModule to generate
+#     batched continuations for string prompts, then converts them to
+#     MIDI/PrettyMIDI/audio/figure via your existing helpers.
+#     """
+#     def __init__(self, pl_module,
+#                 max_new_tokens: int,
+#                 do_sample: bool = True,           # set True for stochastic decoding
+#                 temperature: float = 0.8,
+#                 top_p: float = 0.95,
+#                 top_k: int = 50,
+#                 # num_beams: int = 1,
+#                 repetition_penalty: float = 1.1,   # >1.0 discourages repeats
+#                 # truncate_to: Optional[int] = 1024, # max prompt length tokens (None = no extra truncation)
+#                 # return_full_text: bool = False,    # if False, only return the continuation (common for previews)
+#                 audio_sr: int = 44100,
+#                 max_audio_secs: float = 8.0       # keep TB event files lean
+
+#     ):
+                 
+#                 #   gen_cfg: PreviewGenConfig = PreviewGenConfig()):
+#         self.pl_module = pl_module
+#         self.model = pl_module.model
+#         self.tokenizer = pl_module.tokenizer
+#         self.device = pl_module.device
+#         self.max_audio_secs = max_audio_secs
+#         self.audio_sr = audio_sr
+#         self.max_new_tokens = max_new_tokens
+
+#         # Reasonable fallbacks for PAD/EOS to avoid generate() complaints.
+#         # (Some decoder-only models don't have pad_token_id set.)
+#         if self.tokenizer.pad_token_id is None:
+#             # safest fallback is EOS as PAD for decoder-only LMs
+#             self.tokenizer.pad_token = self.tokenizer.eos_token
+
+#         self.eos_id = self.tokenizer.eos_token_id
+#         self.pad_id = self.tokenizer.pad_token_id
+
+# # Some models don’t have a pad token; set it to eos to avoid warnings/errors
+#         if self.tokenizer.pad_token_id is None and self.tokenizer.eos_token_id is not None:
+#             self.tokenizer.pad_token = self.tokenizer.eos_token
+
+#         self.generator_pipeline = pipeline(
+#             task="text-generation",
+#             model=self.model,
+#             tokenizer=self.tokenizer,
+#             do_sample=do_sample,           # set False for greedy / deterministic
+#             temperature=temperature,
+#             top_p=top_p,
+#             top_k=top_k, 
+#             repetition_penalty=repetition_penalty,
+#             max_new_tokens=max_new_tokens,
+#         )
+
+
+#     @torch.inference_mode()
+#     def __call__(self, prompts: List[str]) -> List[Tuple[torch.Tensor, int, Dict[str, str], object]]:
+#         """
+#         Returns a list of tuples:
+#           (waveform [1, T] float in [-1,1], sr, {"prompt": str, "gen": str, "midi_file":path_to_midi_file}, pretty_midi_obj)
+
+#         Note: we also crop audio to cfg.max_audio_secs.
+#         """
+#         # print(f"HFPreviewResponder __call... prompt lens {[len(p) for p in prompts]}")
+#         assert len(prompts) == 1, f"You sent more than one prompt but currently only support 1"
+#         if not prompts:
+#             return []
+
+#         result = self.generator_pipeline(prompts[0], return_full_text=False)
+#         outs = [r["generated_text"] for r in result]
+
+#         previews = []
+#         for prompt, gen_text in zip(prompts, outs):
+#             print(f"Length of prompt {len(prompt)} len of output {len(gen_text)}")
+#             # print(f"here's the output... \n{gen_text}")
+#             with tempfile.NamedTemporaryFile(suffix=".mid", delete=False) as tmp:
+#                 # print(f"HFPreviewResponder:__call__ about to render... prompt: {prompt} \n\n result: {gen_text}")
+#                 midipath = tmp.name
+#                 njam_to_midi(gen_text, midipath)
+#                 pm = midi_to_pretty_midi(midipath)
+#                 wave, sr = pretty_midi_to_audio(pm, sr=self.audio_sr)
+#                 # crop to keep TB small
+#                 max_len = int(self.max_audio_secs * self.audio_sr)
+#                 wave = wave[..., :max_len]
+#                 preview = {"audio":wave.cpu(), "samplerate":sr, "prompt": prompt, "gen_text": gen_text, "midi_file":midipath, "pretty_midi_obj":pm}
+#                 previews.append(preview)
+#                 # previews.append((wave.cpu(), sr, {"prompt": prompt, "gen": gen_text, "midi_file":midipath}, pm))
+#         return previews
+    
+
+class PreviewAudioCallback(Callback):
+    """Training callback that passes a set of prompts to the model, autoregresses a few steps then converts output to MIDI and audio
+    which is saved to the  previews folder for this run
     """
-    render_function you can pass to a custom trainer callback.
-    It uses the HF model/tokenizer inside your LightningModule to generate
-    batched continuations for string prompts, then converts them to
-    MIDI/PrettyMIDI/audio/figure via your existing helpers.
-    """
-    def __init__(self, pl_module,
-                max_new_tokens: int,
-                do_sample: bool = True,           # set True for stochastic decoding
-                temperature: float = 0.8,
-                top_p: float = 0.95,
-                top_k: int = 50,
-                # num_beams: int = 1,
-                repetition_penalty: float = 1.1,   # >1.0 discourages repeats
-                # truncate_to: Optional[int] = 1024, # max prompt length tokens (None = no extra truncation)
-                # return_full_text: bool = False,    # if False, only return the continuation (common for previews)
-                audio_sr: int = 44100,
-                max_audio_secs: float = 8.0       # keep TB event files lean
+    def __init__(
+        self,
+        prompt_files,
+        max_prompt_len:int = 1024,  
+        every_n_steps:int = 0, 
+        every_n_epochs: int = 1,
+        max_secs: float = 8.0,
+        pl_module= None,
+        max_new_tokens: int = 128,
+        do_sample: bool = True,           # set True for stochastic decoding
+        temperature: float = 0.8,
+        top_p: float = 0.95,
+        top_k: int = 50,
+        # num_beams: int = 1,
+        repetition_penalty: float = 1.1,   # >1.0 discourages repeats
+        # truncate_to: Optional[int] = 1024, # max prompt length tokens (None = no extra truncation)
+        # return_full_text: bool = False,    # if False, only return the continuation (common for previews)
+        audio_sr: int = 44100,
+        max_audio_secs: float = 8.0       # keep TB event files lean
 
     ):
-                 
-                #   gen_cfg: PreviewGenConfig = PreviewGenConfig()):
+        super().__init__()
+
+        
+        prompts = []
+        for fname in prompt_files:
+            assert os.path.exists(fname), f"Trying to setup training output previews but {fname} does not exist"
+            print(f"PreviewAudioCallback loading file {fname} for len: {max_prompt_len}")
+            with open(fname) as f:
+                prompt = f.read()[0:max_prompt_len] # trim prompt to max length
+                prompt = up_to_last(prompt, '\n') # make sure prompt ends after a complete njam message
+                prompts.append(prompt)
+        
+        self.prompts = prompts
+        self.every_n_epochs = every_n_epochs
+        self.max_secs = max_secs
+        self.every_n_steps = every_n_steps
+
+        ### stuff needed to do the renders
+
         self.pl_module = pl_module
         self.model = pl_module.model
         self.tokenizer = pl_module.tokenizer
@@ -216,7 +335,7 @@ class HFPreviewResponder:
         self.max_audio_secs = max_audio_secs
         self.audio_sr = audio_sr
         self.max_new_tokens = max_new_tokens
-
+        self.max_prompt_len = max_prompt_len
         # Reasonable fallbacks for PAD/EOS to avoid generate() complaints.
         # (Some decoder-only models don't have pad_token_id set.)
         if self.tokenizer.pad_token_id is None:
@@ -226,7 +345,6 @@ class HFPreviewResponder:
         self.eos_id = self.tokenizer.eos_token_id
         self.pad_id = self.tokenizer.pad_token_id
 
-# Some models don’t have a pad token; set it to eos to avoid warnings/errors
         if self.tokenizer.pad_token_id is None and self.tokenizer.eos_token_id is not None:
             self.tokenizer.pad_token = self.tokenizer.eos_token
 
@@ -243,14 +361,28 @@ class HFPreviewResponder:
         )
 
 
-    @torch.inference_mode()
-    def __call__(self, prompts: List[str]) -> List[Tuple[torch.Tensor, int, Dict[str, str], object]]:
-        """
-        Returns a list of tuples:
-          (waveform [1, T] float in [-1,1], sr, {"prompt": str, "gen": str, "midi_file":path_to_midi_file}, pretty_midi_obj)
 
-        Note: we also crop audio to cfg.max_audio_secs.
+    @rank_zero_only
+    def on_train_batch_end(self, trainer, pl_module, outputs, batch, batch_idx):
+        """Called after every training batch """
+        # if "train" not in self.run_on: return
+        print(f"Preview gen callback triggered {trainer.global_step}")
+        if self.every_n_steps <= 0: return
+        if trainer.global_step % self.every_n_steps != 0: return
+        print(f"Preview gen callback rendering... {trainer.global_step}")
+        # print(self.prompts)
+        self._log_preview(trainer, pl_module, tag_prefix="train", prompts=self.prompts)
+
+
+    @torch.inference_mode()
+    def render_previews(self) -> List[Tuple[torch.Tensor, int, Dict[str, str], object]]:
         """
+        feeds each of self,prompts[0:self.max_prompt_len] to the model and autoregresses for up to self.max_new_tokens tokens
+        returns array of these: 
+        {"audio":wave.cpu(), "samplerate":sr, "prompt": prompt, "gen_text": gen_text, "midi_file":midipath, "pretty_midi_obj":pm}
+
+        """
+        prompts = self.prompts
         # print(f"HFPreviewResponder __call... prompt lens {[len(p) for p in prompts]}")
         assert len(prompts) == 1, f"You sent more than one prompt but currently only support 1"
         if not prompts:
@@ -276,53 +408,6 @@ class HFPreviewResponder:
                 previews.append(preview)
                 # previews.append((wave.cpu(), sr, {"prompt": prompt, "gen": gen_text, "midi_file":midipath}, pm))
         return previews
-    
-
-class PreviewAudioCallback(Callback):
-    """Training callback that passes a set of prompts to the model, autoregresses a few steps then converts output to MIDI and audio
-    which is saved to the  previews folder for this run
-    """
-    def __init__(
-        self,
-        prompt_files,
-        max_prompt_len:int = 1024,  
-        render_fn: Optional[Callable] = None,
-        every_n_steps:int = 0, 
-        every_n_epochs: int = 1,
-        max_secs: float = 8.0,
-    ):
-        super().__init__()
-
-        
-        prompts = []
-        for fname in prompt_files:
-            assert os.path.exists(fname), f"Trying to setup training output previews but {fname} does not exist"
-            print(f"PreviewAudioCallback loading file {fname} for len: {max_prompt_len}")
-            with open(fname) as f:
-                prompts.append(f.read()[0:max_prompt_len])
-        
-        self.prompts = prompts
-        self.every_n_epochs = every_n_epochs
-        self.max_secs = max_secs
-        self.every_n_steps = every_n_steps
-
-        if render_fn is None:
-            self.render_fn = self.default_render_fn
-        else:
-            self.render_fn = render_fn
-
-
-    @rank_zero_only
-    def on_train_batch_end(self, trainer, pl_module, outputs, batch, batch_idx):
-        """Called after every training batch """
-        # if "train" not in self.run_on: return
-        print(f"Preview gen callback triggered {trainer.global_step}")
-        if self.every_n_steps <= 0: return
-        if trainer.global_step % self.every_n_steps != 0: return
-        print(f"Preview gen callback rendering... {trainer.global_step}")
-        # print(self.prompts)
-        self._log_preview(trainer, pl_module, tag_prefix="train", prompts=self.prompts)
-
 
     def _log_preview(self, trainer:Trainer, pl_module, tag_prefix: str, prompts:list):
         """generate a preview into tensorboard's log and save the generated midi file out"""
@@ -340,7 +425,8 @@ class PreviewAudioCallback(Callback):
         pl_module.eval()
 
         with torch.no_grad():
-            previews = self.render_fn(prompts)
+            # previews = self.render_fn(prompts)
+            previews = self.render_previews()
 
         # make some assertions about what is in the previews
         assert len(previews) > 0, f"Previews from render fn look bad..."
@@ -364,7 +450,10 @@ class PreviewAudioCallback(Callback):
             # we could save 'wave' to an audio file with 
             # librosa here too ... 
 
+
+
 def load_and_validate_config(config_path: Path) -> Dict[str, Any]:
+    """Check model config file which should contain multiple model descriptions in json format """
     assert config_path.exists(), f"Config not found: {config_path}"
     with config_path.open("r", encoding="utf-8") as f:
         cfg = json.load(f)
