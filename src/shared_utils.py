@@ -196,7 +196,8 @@ class PreviewGenConfig:
 
 class HFPreviewResponder:
     """
-    Uses the HF model/tokenizer inside your LightningModule to generate
+    render_function you can pass to a custom trainer callback.
+    It uses the HF model/tokenizer inside your LightningModule to generate
     batched continuations for string prompts, then converts them to
     MIDI/PrettyMIDI/audio/figure via your existing helpers.
     """
@@ -270,6 +271,7 @@ class HFPreviewResponder:
         previews = []
         for prompt, gen_text in zip(prompts, outs):
             with tempfile.NamedTemporaryFile(suffix=".mid", delete=False) as tmp:
+                print(f"HFPreviewResponder:__call__ about to render... prompt: {prompt} \n\n result: {gen_text}")
                 midipath = tmp.name
                 njam_to_midi(gen_text, midipath)
                 pm = midi_to_pretty_midi(midipath)
@@ -283,10 +285,13 @@ class HFPreviewResponder:
     
 
 class PreviewAudioCallback(Callback):
+    """Training callback that passes a set of prompts to the model, autoregresses a few steps then converts output to MIDI and audio
+    which is saved to the  previews folder for this run
+    """
     def __init__(
         self,
         prompt_files,
-        prompt_lines,  
+        ctx_len_lines,  
         render_fn: Optional[Callable] = None,
         every_n_steps:int = 0, 
         every_n_epochs: int = 1,
@@ -299,7 +304,7 @@ class PreviewAudioCallback(Callback):
             assert os.path.exists(fname), f"Trying to setup training output previews but {fname} does not exist"
             print(f"PreviewAudioCallback loading file {fname}")
             with open(fname) as f:
-                prompts.append("\n".join(f.read().split('\n')[0:prompt_lines]))
+                prompts.append("\n".join(f.read().split('\n')[0:ctx_len_lines]))
 
         self.prompts = prompts
         self.every_n_epochs = every_n_epochs
@@ -1088,7 +1093,7 @@ class SimpleDataModule(L.LightningDataModule):
         test_folder   = self.data_dir / "validation"
         files = find_text_files(test_folder)
         ctx_stats = SimpleDataModule.get_context_stats_for_file(files[0], self.tokenizer, self.want_ctx_size)
-        print(f"SimpleDataModule: analysed model to find max ctx sentences. Heres the stats: {ctx_stats}")
+        print(f"SimpleDataModule: analysed model you need you nyou need to manually create the training and validation data folderseed to manually create the training and validation data foldersto manually create the training and validation data foldersto find max ctx sentences. Heres the stats: {ctx_stats}")
         def floor_power_of_two(n: int) -> int:
             if n < 1:
                 raise ValueError("n must be >= 1")
@@ -1112,8 +1117,8 @@ class SimpleDataModule(L.LightningDataModule):
     def setup(self, stage: str | None = None):
         train_root = self.data_dir / "training"
         val_root   = self.data_dir / "validation"
-        assert train_root.exists(), f"Training directory not found: {train_root}"
-        assert val_root.exists(),   f"Validation directory not found: {val_root}"
+        assert train_root.exists(), f"Training directory not found: {train_root} you need to manually create the training and validation data folders"
+        assert val_root.exists(),   f"Validation directory not found: {val_root} you need to manually create the training and validation data folders"
 
         ## some notes on the validation dataset
         ## I wanted to have different sizes of 'context' input
