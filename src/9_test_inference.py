@@ -43,8 +43,6 @@ def main(prompt):
             # model must have some parameters
             assert sum(p.numel() for p in model.parameters()) > 0, "Model has zero parameters?"
 
-
-
             # Some models don’t have a pad token; set it to eos to avoid warnings/errors
             if tokenizer.pad_token_id is None and tokenizer.eos_token_id is not None:
                 tokenizer.pad_token = tokenizer.eos_token

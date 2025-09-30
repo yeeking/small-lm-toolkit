@@ -194,13 +194,13 @@ class HFPreviewResponder:
     MIDI/PrettyMIDI/audio/figure via your existing helpers.
     """
     def __init__(self, pl_module,
-                max_new_tokens: int = 64,
+                max_new_tokens: int,
                 do_sample: bool = True,           # set True for stochastic decoding
-                temperature: float = 0.7,
+                temperature: float = 0.8,
                 top_p: float = 0.95,
                 top_k: int = 50,
                 # num_beams: int = 1,
-                repetition_penalty: float = 1.0,   # >1.0 discourages repeats
+                repetition_penalty: float = 1.1,   # >1.0 discourages repeats
                 # truncate_to: Optional[int] = 1024, # max prompt length tokens (None = no extra truncation)
                 # return_full_text: bool = False,    # if False, only return the continuation (common for previews)
                 audio_sr: int = 44100,
@@ -251,6 +251,7 @@ class HFPreviewResponder:
         Note: we also crop audio to cfg.max_audio_secs.
         """
         print(f"HFPreviewResponder __call... prompt lens {[len(p) for p in prompts]}")
+        assert len(prompts) == 1, f"You sent more than one prompt but currently only support 1"
         if not prompts:
             return []
 
@@ -262,7 +263,10 @@ class HFPreviewResponder:
         # 4) Convert each output to MIDI → PrettyMIDI → audio/figure
         previews = []
         for prompt, gen_text in zip(prompts, outs):
-            print(f"Prompt: {prompt} and otput: {gen_text}")
+            
+            # gen_text = gen_text[len(prompt):-1]
+            # print(f"Prompt: {prompt} and otput: {gen_text}")
+            print(f"Length of prompt {len(prompt)} len of output {len(gen_text)}")
             with tempfile.NamedTemporaryFile(suffix=".mid", delete=False) as tmp:
                 print(f"HFPreviewResponder:__call__ about to render... prompt: {prompt} \n\n result: {gen_text}")
                 midipath = tmp.name
@@ -273,7 +277,7 @@ class HFPreviewResponder:
                 max_len = int(self.max_audio_secs * self.audio_sr)
                 wave = wave[..., :max_len]
                 previews.append((wave.cpu(), sr, {"prompt": prompt, "gen": gen_text, "midi_file":midipath}, pm))
-
+            assert False 
         return previews
     
 
