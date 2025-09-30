@@ -256,14 +256,13 @@ class HFPreviewResponder:
         if not prompts:
             return []
 
-        print(f"Heres the prompt {prompts[0]}")
         result = self.generator_pipeline(prompts[0], return_full_text=False)
         outs = [r["generated_text"] for r in result]
 
         previews = []
         for prompt, gen_text in zip(prompts, outs):
             print(f"Length of prompt {len(prompt)} len of output {len(gen_text)}")
-            print(f"here's the output... \n{gen_text}")
+            # print(f"here's the output... \n{gen_text}")
             with tempfile.NamedTemporaryFile(suffix=".mid", delete=False) as tmp:
                 # print(f"HFPreviewResponder:__call__ about to render... prompt: {prompt} \n\n result: {gen_text}")
                 midipath = tmp.name
@@ -276,7 +275,6 @@ class HFPreviewResponder:
                 preview = {"audio":wave.cpu(), "samplerate":sr, "prompt": prompt, "gen_text": gen_text, "midi_file":midipath, "pretty_midi_obj":pm}
                 previews.append(preview)
                 # previews.append((wave.cpu(), sr, {"prompt": prompt, "gen": gen_text, "midi_file":midipath}, pm))
-            assert False 
         return previews
     
 
