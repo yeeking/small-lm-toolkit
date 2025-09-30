@@ -16,6 +16,8 @@ if torch.cuda.is_available():
     torch.set_float32_matmul_precision("high")
     torch.backends.cudnn.allow_tf32 = True
 
+from torch.optim import AdamW
+
 from llama_cpp import Llama
 from huggingface_hub import snapshot_download, hf_hub_download
 
@@ -24,11 +26,15 @@ from torch.utils.data import Dataset, DataLoader
 from transformers import (
     AutoTokenizer,
     AutoModelForCausalLM,
-    get_linear_schedule_with_warmup,
+    # get_linear_schedule_with_warmup,
+    pipeline
 )
+
 import lightning as L
 from lightning.pytorch import Trainer, seed_everything
 from lightning.pytorch.tuner.tuning import Tuner
+from lightning.pytorch.loggers import TensorBoardLogger
+
 
 from peft import LoraConfig, get_peft_model, TaskType
 
@@ -180,20 +186,6 @@ def _find_first_marker(text: str, markers: List[str]) -> Optional[int]:
 
 
 
-@dataclass
-class PreviewGenConfig:
-    max_new_tokens: int = 64
-    do_sample: bool = False           # set True for stochastic decoding
-    temperature: float = 0.7
-    top_p: float = 0.95
-    top_k: int = 50
-    num_beams: int = 1
-    repetition_penalty: float = 1.0   # >1.0 discourages repeats
-    truncate_to: Optional[int] = 1024 # max prompt length tokens (None = no extra truncation)
-    return_full_text: bool = False    # if False, only return the continuation (common for previews)
-    audio_sr: int = 44100
-    max_audio_secs: float = 8.0       # keep TB event files lean
-
 class HFPreviewResponder:
     """
     render_function you can pass to a custom trainer callback.
@@ -201,21 +193,54 @@ class HFPreviewResponder:
     batched continuations for string prompts, then converts them to
     MIDI/PrettyMIDI/audio/figure via your existing helpers.
     """
-    def __init__(self, pl_module, gen_cfg: PreviewGenConfig = PreviewGenConfig()):
+    def __init__(self, pl_module,
+                max_new_tokens: int = 64,
+                do_sample: bool = True,           # set True for stochastic decoding
+                temperature: float = 0.7,
+                top_p: float = 0.95,
+                top_k: int = 50,
+                # num_beams: int = 1,
+                repetition_penalty: float = 1.0,   # >1.0 discourages repeats
+                # truncate_to: Optional[int] = 1024, # max prompt length tokens (None = no extra truncation)
+                # return_full_text: bool = False,    # if False, only return the continuation (common for previews)
+                audio_sr: int = 44100,
+                max_audio_secs: float = 8.0       # keep TB event files lean
+
+    ):
+                 
+                #   gen_cfg: PreviewGenConfig = PreviewGenConfig()):
         self.pl_module = pl_module
-        self.cfg = gen_cfg
         self.model = pl_module.model
-        self.tok = pl_module.tokenizer
+        self.tokenizer = pl_module.tokenizer
         self.device = pl_module.device
+        self.max_audio_secs = max_audio_secs
+        self.audio_sr = audio_sr
 
         # Reasonable fallbacks for PAD/EOS to avoid generate() complaints.
         # (Some decoder-only models don't have pad_token_id set.)
-        if self.tok.pad_token_id is None:
+        if self.tokenizer.pad_token_id is None:
             # safest fallback is EOS as PAD for decoder-only LMs
-            self.tok.pad_token = self.tok.eos_token
+            self.tokenizer.pad_token = self.tokenizer.eos_token
 
-        self.eos_id = self.tok.eos_token_id
-        self.pad_id = self.tok.pad_token_id
+        self.eos_id = self.tokenizer.eos_token_id
+        self.pad_id = self.tokenizer.pad_token_id
+
+# Some models don’t have a pad token; set it to eos to avoid warnings/errors
+        if self.tokenizer.pad_token_id is None and self.tokenizer.eos_token_id is not None:
+            self.tokenizer.pad_token = self.tokenizer.eos_token
+
+        self.generator_pipeline = pipeline(
+            task="text-generation",
+            model=self.model,
+            tokenizer=self.tokenizer,
+            do_sample=do_sample,           # set False for greedy / deterministic
+            temperature=temperature,
+            top_p=top_p,
+            top_k=top_k, 
+            repetition_penalty=repetition_penalty,
+            max_new_tokens=max_new_tokens,
+        )
+
 
     @torch.inference_mode()
     def __call__(self, prompts: List[str]) -> List[Tuple[torch.Tensor, int, Dict[str, str], object]]:
@@ -229,55 +254,23 @@ class HFPreviewResponder:
         if not prompts:
             return []
 
-        # 1) Tokenize as a batch (pad to longest, send to device)
-        enc = self.tok(
-            prompts,
-            return_tensors="pt",
-            padding=True,
-            truncation=True,
-            max_length=self.cfg.truncate_to if self.cfg.truncate_to else None,
-        )
-        enc = {k: v.to(self.device) for k, v in enc.items()}
+        result = self.generator_pipeline(prompts[0])#[0]["generated_text"]
 
-        # 2) Generate
-        #    See HF docs for arguments like max_new_tokens, sampling vs beams, etc.
-        #    Also set eos/pad ids explicitly for decoder-only models. :contentReference[oaicite:1]{index=1}
-        gen_ids = self.model.generate(
-            **enc,
-            max_new_tokens=self.cfg.max_new_tokens,
-            do_sample=self.cfg.do_sample,
-            temperature=self.cfg.temperature if self.cfg.do_sample else None,
-            top_p=self.cfg.top_p if self.cfg.do_sample else None,
-            top_k=self.cfg.top_k if self.cfg.do_sample else None,
-            num_beams=self.cfg.num_beams,
-            repetition_penalty=self.cfg.repetition_penalty,
-            pad_token_id=self.pad_id,
-            eos_token_id=self.eos_id,
-        )
-
-        # 3) Decode: full text or just the continuation
-        outs: List[str]
-        if self.cfg.return_full_text:
-            outs = self.tok.batch_decode(gen_ids, skip_special_tokens=True)
-        else:
-            # Slice off the prompt portion per item, so you only see new text
-            outs = []
-            input_lens = (enc["attention_mask"].sum(dim=1)).tolist()
-            for ids_row, in_len in zip(gen_ids, input_lens):
-                cont_ids = ids_row[in_len:]  # only newly generated tokens
-                outs.append(self.tok.decode(cont_ids, skip_special_tokens=True))
+        print(result)
+        outs = [r["generated_text"] for r in result]
 
         # 4) Convert each output to MIDI → PrettyMIDI → audio/figure
         previews = []
         for prompt, gen_text in zip(prompts, outs):
+            print(f"Prompt: {prompt} and otput: {gen_text}")
             with tempfile.NamedTemporaryFile(suffix=".mid", delete=False) as tmp:
                 print(f"HFPreviewResponder:__call__ about to render... prompt: {prompt} \n\n result: {gen_text}")
                 midipath = tmp.name
                 njam_to_midi(gen_text, midipath)
                 pm = midi_to_pretty_midi(midipath)
-                wave, sr = pretty_midi_to_audio(pm, sr=self.cfg.audio_sr)
+                wave, sr = pretty_midi_to_audio(pm, sr=self.audio_sr)
                 # crop to keep TB small
-                max_len = int(self.cfg.max_audio_secs * sr)
+                max_len = int(self.max_audio_secs * self.audio_sr)
                 wave = wave[..., :max_len]
                 previews.append((wave.cpu(), sr, {"prompt": prompt, "gen": gen_text, "midi_file":midipath}, pm))
 
@@ -1232,4 +1225,112 @@ class SimpleDataModule(L.LightningDataModule):
         }
 
         return stats
+
+
+# --------------------
+# LightningModule
+# --------------------
+class CausalLMModule(L.LightningModule):
+    def __init__(
+        self,
+        model: AutoModelForCausalLM,
+        tokenizer: AutoTokenizer,
+        lr: float = 2e-5,
+        weight_decay: float = 0.01,
+        warmup_ratio: float = 0.05,
+        max_new_tokens: int = 64,
+    ):
+        super().__init__()
+        self.save_hyperparameters(ignore=["model", "tokenizer"])
+        self.model = model
+        self.tokenizer = tokenizer
+        self.lr = lr
+        self.weight_decay = weight_decay
+        self.warmup_ratio = warmup_ratio
+        self.max_new_tokens = max_new_tokens
+
+        self._param_count = sum(p.numel() for p in self.model.parameters())
+
+    def forward(self, **batch):
+        return self.model(**batch)
+
+    def training_step(self, batch, batch_idx):
+        out = self.model(**batch)
+        loss = out.loss
+        self.log("train_loss", loss, on_step=True, on_epoch=False, prog_bar=True)
+        return loss
+
+    def validation_step(self, batch, batch_idx):
+        out = self.model(**batch)
+        val_loss = out.loss
+        self.log("val_loss", val_loss, on_step=True, on_epoch=True, prog_bar=True)
+        return val_loss
+
+    def on_train_start(self):
+        if isinstance(self.logger, TensorBoardLogger):
+            tb = self.logger.experiment
+            tb.add_scalar("model/num_parameters", float(self._param_count), self.global_step)
+            tb.add_text("model/tokenizer_info", f"vocab_size={self.tokenizer.vocab_size}", self.global_step)
+
+    def on_validation_epoch_end(self):
+        # Perplexity from aggregated val_loss
+        LOG.info(f"Validation epoch ended - running additional evaluations")
+
+        val_loss = self.trainer.callback_metrics.get("val_loss")
+        if val_loss is not None:
+            try:
+                ppl = torch.exp(val_loss)
+                self.log("perplexity", ppl, prog_bar=True)
+                if isinstance(self.logger, TensorBoardLogger):
+                    self.logger.experiment.add_scalar("val/perplexity", float(ppl), self.global_step)
+            except Exception:
+                pass
+
+        # Sample generations for a few validation prompts
+        dm = self.trainer.datamodule
+        if not isinstance(dm, shared_utils.SimpleDataModule) or not dm.val_preview_texts:
+            return
+        try:
+            self.model.eval()
+            samples = []
+            for i, prompt_text in enumerate(dm.val_preview_texts):
+                enc = self.tokenizer(
+                    prompt_text,
+                    return_tensors="pt",
+                    truncation=True,
+                    max_length=dm.want_ctx_size,
+                )
+                enc = {k: v.to(self.device) for k, v in enc.items()}
+
+                with torch.no_grad():
+                    gen_ids = self.model.generate(
+                        **enc,
+                        max_new_tokens=self.max_new_tokens,
+                        do_sample=False,
+                        pad_token_id=self.tokenizer.pad_token_id,
+                        eos_token_id=self.tokenizer.eos_token_id,
+                    )
+                gen_text = self.tokenizer.decode(gen_ids[0], skip_special_tokens=True)
+                samples.append(f"### Prompt {i+1}\n{prompt_text}\n\n### Output {i+1}\n{gen_text}\n")
+
+            if isinstance(self.logger, TensorBoardLogger):
+                self.logger.experiment.add_text("samples", "\n".join(samples), self.global_step)
+        except Exception as e:
+            LOG.warning(f"Sample generation failed: {e}")
+        LOG.info(f"Validation epoch ended - additional evaluations complete")
+
+
+    def configure_optimizers(self):
+        """This configuration drives learning rate scheduling using epoch"""
+        opt = AdamW(self.parameters(), lr=self.lr, weight_decay=self.weight_decay)
+
+        warmup_epochs = max(1, int(self.trainer.max_epochs * self.warmup_ratio))
+        def lr_lambda(epoch):
+            if epoch < warmup_epochs:
+                return float(epoch + 1) / float(warmup_epochs)   # linear warmup
+            progress = (epoch - warmup_epochs) / max(1, self.trainer.max_epochs - warmup_epochs)
+            return max(0.0, 1.0 - progress)                      # linear decay
+
+        sch = torch.optim.lr_scheduler.LambdaLR(opt, lr_lambda)
+        return {"optimizer": opt, "lr_scheduler": {"scheduler": sch, "interval": "epoch", "name": "epoch_warmup_linear"}}
 
