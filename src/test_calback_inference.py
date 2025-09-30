@@ -62,7 +62,7 @@ def main(prompt):
             prompt_files=prompt_files,
             max_prompt_len=1024,  
             pl_module=smallm_model,
-            max_new_tokens= 128,
+            max_new_tokens= 1024,
             do_sample = True,           # set True for stochastic decoding
             temperature = 0.8,
             top_p = 0.95,
@@ -70,9 +70,9 @@ def main(prompt):
             repetition_penalty = 1.1   # >1.0 discourages repeats
         )
         
-
+        
         previews = render_callback.render_previews()
-        print(previews)
+        # print(previews)   
         # now what you gonna do with them there previews bud?
         # how about this brother?
         preview_out_dir = 'test_preview'
@@ -84,14 +84,19 @@ def main(prompt):
             filestub = f"{repo.replace('/', '_')}-{size_b}"
 
             midifile = os.path.join(preview_out_dir, f"{filestub}.mid")
+            txtfile =  os.path.join(preview_out_dir, f"{filestub}.txt")
             print(f"Saving file to {midifile}")
+            
             shutil.copy2(source_midi_file, midifile)
+            with open(txtfile, 'w') as f:
+                f.write(p['prompt'] + '\n\n')
+                f.write(p['gen_text'])
             # we could save 'wave' to an audio file with 
             # librosa here too ...  
 
 
         print(f"[OK] Successfully rendered with {repo}")
-        break
+        # break
     # except Exception as e:
         #     print(f"[FAIL] Error loading {repo}: {e}")
         #     # Uncomment to stop on first failure:

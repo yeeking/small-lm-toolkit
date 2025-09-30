@@ -336,17 +336,17 @@ class PreviewAudioCallback(Callback):
         self.audio_sr = audio_sr
         self.max_new_tokens = max_new_tokens
         self.max_prompt_len = max_prompt_len
-        # Reasonable fallbacks for PAD/EOS to avoid generate() complaints.
-        # (Some decoder-only models don't have pad_token_id set.)
-        if self.tokenizer.pad_token_id is None:
-            # safest fallback is EOS as PAD for decoder-only LMs
-            self.tokenizer.pad_token = self.tokenizer.eos_token
+        # # Reasonable fallbacks for PAD/EOS to avoid generate() complaints.
+        # # (Some decoder-only models don't have pad_token_id set.)
+        # if self.tokenizer.pad_token_id is None:
+        #     # safest fallback is EOS as PAD for decoder-only LMs
+        #     self.tokenizer.pad_token = self.tokenizer.eos_token
 
-        self.eos_id = self.tokenizer.eos_token_id
-        self.pad_id = self.tokenizer.pad_token_id
+        # self.eos_id = self.tokenizer.eos_token_id
+        # self.pad_id = self.tokenizer.pad_token_id
 
-        if self.tokenizer.pad_token_id is None and self.tokenizer.eos_token_id is not None:
-            self.tokenizer.pad_token = self.tokenizer.eos_token
+        # if self.tokenizer.pad_token_id is None and self.tokenizer.eos_token_id is not None:
+        #     self.tokenizer.pad_token = self.tokenizer.eos_token
 
         self.generator_pipeline = pipeline(
             task="text-generation",
@@ -375,7 +375,7 @@ class PreviewAudioCallback(Callback):
 
 
     @torch.inference_mode()
-    def render_previews(self) -> List[Tuple[torch.Tensor, int, Dict[str, str], object]]:
+    def render_previews(self, include_prompt_in_midi_render=True):
         """
         feeds each of self,prompts[0:self.max_prompt_len] to the model and autoregresses for up to self.max_new_tokens tokens
         returns array of these: 
@@ -398,7 +398,8 @@ class PreviewAudioCallback(Callback):
             with tempfile.NamedTemporaryFile(suffix=".mid", delete=False) as tmp:
                 # print(f"HFPreviewResponder:__call__ about to render... prompt: {prompt} \n\n result: {gen_text}")
                 midipath = tmp.name
-                njam_to_midi(gen_text, midipath)
+                if include_prompt_in_midi_render: njam_to_midi(prompt + "\n" + gen_text, midipath)
+                else: njam_to_midi(gen_text, midipath)
                 pm = midi_to_pretty_midi(midipath)
                 wave, sr = pretty_midi_to_audio(pm, sr=self.audio_sr)
                 # crop to keep TB small
