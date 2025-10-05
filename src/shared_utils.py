@@ -305,9 +305,13 @@ class PreviewAudioCallback(Callback):
             with tempfile.NamedTemporaryFile(suffix=".mid", delete=False) as tmp:
                 # print(f"HFPreviewResponder:__call__ about to render... prompt: {prompt} \n\n result: {gen_text}")
                 midipath = tmp.name
-                if include_prompt_in_midi_render: njam_to_midi(prompt + "\n" + gen_text, midipath)
-                else: njam_to_midi(gen_text, midipath)
-                pm = midi_to_pretty_midi(midipath)
+                try:
+                    if include_prompt_in_midi_render: njam_to_midi(prompt + "\n" + gen_text, midipath)
+                    else: njam_to_midi(gen_text, midipath)
+                    pm = midi_to_pretty_midi(midipath)
+                except:
+                    pm = None
+                    midipath = None
                 # render audio 
                 #wave, sr = pretty_midi_to_audio(pm, sr=self.audio_sr)
                 # crop to keep TB small
@@ -356,19 +360,20 @@ class PreviewAudioCallback(Callback):
             #writer.add_audio(f"preview/{i+1}/audio", p["audio"], global_step=global_step, sample_rate=p["samplerate"])
             writer.add_text(f"preview/{i+1}/text", p['gen_text'], global_step=global_step)
             # if maybe_pm is not None:
-            fig = pretty_midi_to_fig(p["pretty_midi_obj"])
-            writer.add_figure(f"preview/{i+1}/pianoroll", fig, global_step=global_step)
-            plt.close(fig)
-            source_midi_file = p['midi_file']
-            # , f"step_{global_step:12d}"
-            out_midi_file = os.path.join(preview_out_dir, f"preview_step_{global_step}_{i}.mid")
             out_txt_file = os.path.join(preview_out_dir, f"preview_step_{global_step}_{i}.txt")
-            shutil.copy2(source_midi_file, out_midi_file)
             with open(out_txt_file, 'w') as f:
                 f.write(f"{p['prompt']} \n\n {p['gen_text']}") 
-            # we could save 'wave' to an audio file with 
-            # librosa here too ... 
-
+                
+            if p['pretty_midi_obj'] is not None: # midi conversion crashes sometimes
+                fig = pretty_midi_to_fig(p["pretty_midi_obj"])
+                writer.add_figure(f"preview/{i+1}/pianoroll", fig, global_step=global_step)
+                plt.close(fig)
+                source_midi_file = p['midi_file']
+                # , f"step_{global_step:12d}"
+                out_midi_file = os.path.join(preview_out_dir, f"preview_step_{global_step}_{i}.mid")
+                shutil.copy2(source_midi_file, out_midi_file)
+                # we could save 'wave' to an audio file with 
+                # librosa here too ... 
 
 
 def load_and_validate_config(config_path: Path) -> Dict[str, Any]:
