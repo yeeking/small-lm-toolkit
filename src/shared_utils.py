@@ -273,7 +273,7 @@ class PreviewAudioCallback(Callback):
     def on_train_batch_end(self, trainer, pl_module, outputs, batch, batch_idx):
         """Called after every training batch """
         # if "train" not in self.run_on: return
-        print(f"Preview gen callback triggered {trainer.global_step}")
+        #print(f"Preview gen callback triggered {trainer.global_step}")
         if self.every_n_steps <= 0: return
         if trainer.global_step % self.every_n_steps != 0: return
         print(f"Preview gen callback rendering... {trainer.global_step}")
@@ -308,11 +308,18 @@ class PreviewAudioCallback(Callback):
                 if include_prompt_in_midi_render: njam_to_midi(prompt + "\n" + gen_text, midipath)
                 else: njam_to_midi(gen_text, midipath)
                 pm = midi_to_pretty_midi(midipath)
-                wave, sr = pretty_midi_to_audio(pm, sr=self.audio_sr)
+                # render audio 
+                #wave, sr = pretty_midi_to_audio(pm, sr=self.audio_sr)
                 # crop to keep TB small
-                max_len = int(self.max_audio_secs * self.audio_sr)
-                wave = wave[..., :max_len]
-                preview = {"audio":wave.cpu(), "samplerate":sr, "prompt": prompt, "gen_text": gen_text, "midi_file":midipath, "pretty_midi_obj":pm}
+                #max_len = int(self.max_audio_secs * self.audio_sr)
+                #wave = wave[..., :max_len]
+                #  in case fluidsynth no worky
+                wave = [0] 
+                sr = 44100
+
+#                preview = {"audio":wave.cpu(), "samplerate":sr, "prompt": prompt, "gen_text": gen_text, "midi_file":midipath, "pretty_midi_obj":pm}
+                preview = {"audio":wave, "samplerate":sr, "prompt": prompt, "gen_text": gen_text, "midi_file":midipath, "pretty_midi_obj":pm}
+ 
                 previews.append(preview)
                 # previews.append((wave.cpu(), sr, {"prompt": prompt, "gen": gen_text, "midi_file":midipath}, pm))
         return previews
@@ -346,7 +353,7 @@ class PreviewAudioCallback(Callback):
         # for i, (wave, sr, txt, maybe_pm) in enumerate(previews):
         for i, p in enumerate(previews):
             # log audio & text as before...
-            writer.add_audio(f"preview/{i+1}/audio", p["audio"], global_step=global_step, sample_rate=p["samplerate"])
+            #writer.add_audio(f"preview/{i+1}/audio", p["audio"], global_step=global_step, sample_rate=p["samplerate"])
             writer.add_text(f"preview/{i+1}/text", p['gen_text'], global_step=global_step)
             # if maybe_pm is not None:
             fig = pretty_midi_to_fig(p["pretty_midi_obj"])
