@@ -66,152 +66,11 @@ import shared_utils
 # TEXT_EXTS = {".txt", ".md", ".text"}
 LOG = logging.getLogger("finetune_eval")
 
-
-# --------------------
-# LightningModule
-# --------------------
-# class CausalLMModule(L.LightningModule):
-#     def __init__(
-#         self,
-#         model: AutoModelForCausalLM,
-#         tokenizer: AutoTokenizer,
-#         hf_repo_name: str | None = None,   
-#         lr: float = 2e-5,
-#         weight_decay: float = 0.01,
-#         warmup_ratio: float = 0.05,
-#         max_new_tokens: int = 64,
-#     ):
-#         super().__init__()
-
-#         # If not explicitly given, try to infer from the model
-#         if hf_repo_name is None:
-#             # HF typically sets these:
-#             hf_repo_name = getattr(model, "name_or_path", None)
-#             if hf_repo_name is None and hasattr(model, "config"):
-#                 hf_repo_name = getattr(model.config, "_name_or_path", None)
-
-#         self.hf_repo_name = hf_repo_name
-
-#         self.save_hyperparameters(ignore=["model", "tokenizer"])
-#         self.model = model
-#         self.tokenizer = tokenizer
-#         self.lr = lr
-#         self.weight_decay = weight_decay
-#         self.warmup_ratio = warmup_ratio
-#         self.max_new_tokens = max_new_tokens
-
-#         self._param_count = sum(p.numel() for p in self.model.parameters())
-
-#     def forward(self, **batch):
-#         return self.model(**batch)
-
-#     def training_step(self, batch, batch_idx):
-#         out = self.model(**batch)
-#         loss = out.loss
-#         self.log("train_loss", loss, on_step=True, on_epoch=False, prog_bar=True)
-#         return loss
-
-#     def validation_step(self, batch, batch_idx):
-#         out = self.model(**batch)
-#         val_loss = out.loss
-#         print(f"Validation step called, val_loss={val_loss.item()}")
-#         self.log("val_loss", val_loss, on_step=True, on_epoch=True, prog_bar=True)
-#         return val_loss
-
-#     def on_train_start(self):
-#         if isinstance(self.logger, TensorBoardLogger):
-#             tb = self.logger.experiment
-#             tb.add_scalar("model/num_parameters", float(self._param_count), self.global_step)
-#             tb.add_text("model/tokenizer_info", f"vocab_size={self.tokenizer.vocab_size}", self.global_step)
-
-#     def on_validation_epoch_end(self):
-#         # Perplexity from aggregated val_loss
-#         LOG.info(f"Validation epoch ended - running additional evaluations")
-
-#         val_loss = self.trainer.callback_metrics.get("val_loss")
-#         if val_loss is not None:
-#             try:
-#                 ppl = torch.exp(val_loss)
-#                 self.log("perplexity", ppl, prog_bar=True)
-#                 if isinstance(self.logger, TensorBoardLogger):
-#                     self.logger.experiment.add_scalar("val/perplexity", float(ppl), self.global_step)
-#             except Exception:
-#                 pass
-
-#         # Sample generations for a few validation prompts
-#         dm = self.trainer.datamodule
-#         if not isinstance(dm, shared_utils.SimpleDataModule) or not dm.val_preview_texts:
-#             return
-#         try:
-#             self.model.eval()
-#             samples = []
-#             for i, prompt_text in enumerate(dm.val_preview_texts):
-#                 enc = self.tokenizer(
-#                     prompt_text,
-#                     return_tensors="pt",
-#                     truncation=True,
-#                     max_length=dm.want_ctx_size,
-#                 )
-#                 enc = {k: v.to(self.device) for k, v in enc.items()}
-
-#                 with torch.no_grad():
-#                     gen_ids = self.model.generate(
-#                         **enc,
-#                         max_new_tokens=self.max_new_tokens,
-#                         do_sample=False,
-#                         pad_token_id=self.tokenizer.pad_token_id,
-#                         eos_token_id=self.tokenizer.eos_token_id,
-#                     )
-#                 gen_text = self.tokenizer.decode(gen_ids[0], skip_special_tokens=True)
-#                 samples.append(f"### Prompt {i+1}\n{prompt_text}\n\n### Output {i+1}\n{gen_text}\n")
-
-#             if isinstance(self.logger, TensorBoardLogger):
-#                 self.logger.experiment.add_text("samples", "\n".join(samples), self.global_step)
-#         except Exception as e:
-#             LOG.warning(f"Sample generation failed: {e}")
-#         LOG.info(f"Validation epoch ended - additional evaluations complete")
-
-
-#     def configure_optimizers(self):
-#         """This configuration drives learning rate scheduling using epoch"""
-#         opt = AdamW(self.parameters(), lr=self.lr, weight_decay=self.weight_decay)
-
-#         warmup_epochs = max(1, int(self.trainer.max_epochs * self.warmup_ratio))
-#         def lr_lambda(epoch):
-#             if epoch < warmup_epochs:
-#                 return float(epoch + 1) / float(warmup_epochs)   # linear warmup
-#             progress = (epoch - warmup_epochs) / max(1, self.trainer.max_epochs - warmup_epochs)
-#             return max(0.0, 1.0 - progress)                      # linear decay
-
-#         sch = torch.optim.lr_scheduler.LambdaLR(opt, lr_lambda)
-#         return {"optimizer": opt, "lr_scheduler": {"scheduler": sch, "interval": "epoch", "name": "epoch_warmup_linear"}}
-
-#     @classmethod    
-#     def load_from_checkpoint_auto(cls, ckpt_path: str, force_hf_repo:str = None, local_files_only: bool = False):
-#         """Attempt to load from a lightning checkpoint. Note it expects hf_repo_name in the ckpt hyper params
-#         as it first 
-#         """
-#         # Peek into the checkpoint to find the repo/path
-#         ckpt = torch.load(ckpt_path, map_location="cpu")
-#         hparams = ckpt.get("hyper_parameters", {})
-#         if force_hf_repo is not None: repo = force_hf_repo
-#         else: repo = hparams.get("hf_repo_name", None)
-#         assert repo is not None, f"no hf repo in the ckpt or passed as force_hf_repo so cannot load"
-
-#         tokenizer = AutoTokenizer.from_pretrained(repo, local_files_only=local_files_only)
-#         model = AutoModelForCausalLM.from_pretrained(repo, local_files_only=local_files_only)
-
-#         return cls.load_from_checkpoint(
-#             ckpt_path,
-#             model=model,
-#             tokenizer=tokenizer,
-#         )
-
-
 # --------------------
 # Training runner with OOM fallback
 # --------------------
 def run_for_model(model_cfg: Dict[str, Any], args: argparse.Namespace, global_outdir: Path):
+    """ do a training for the sent model config """
     hf_repo = model_cfg["hf_repo"]
     size_b = model_cfg["size_b"]
     trust_remote_code = bool(model_cfg.get("trust_remote_code", False))
@@ -219,7 +78,6 @@ def run_for_model(model_cfg: Dict[str, Any], args: argparse.Namespace, global_ou
     safe_name = hf_repo.replace("/", "__")
     outdir = global_outdir / safe_name
     outdir.mkdir(parents=True, exist_ok=True)
-
 
     logger = TensorBoardLogger(save_dir=str(outdir), name=f"size_{size_b}")
     ckpt_dir = Path(logger.log_dir) / "checkpoints" 
@@ -265,6 +123,7 @@ def run_for_model(model_cfg: Dict[str, Any], args: argparse.Namespace, global_ou
     # Data
     # num_workers = max(1, (os.cpu_count() or 2) - 1)
     num_workers = shared_utils.suggested_num_workers()   # e.g., becomes 1 if SLURM grants 2 CPUs
+    # num_workers = 4
     # pin_memory = (accelerator == "gpu")  # pin memory is meaningful for CUDA
     pin_memory = False # pinning memory causes leaky file handles so OS.too many files open
     
@@ -286,15 +145,16 @@ def run_for_model(model_cfg: Dict[str, Any], args: argparse.Namespace, global_ou
     )
     LOG.info(f"Validation batches: {len(datamodule.val_dataloader())}")
     
-
-    lit_module = CausalLMModule(
+    # the actual model or at least the lightning wrapper around it 
+    smallm_model = shared_utils.CausalLMModule(
         model=model,
         tokenizer=tokenizer,
         lr=args.lr,
         weight_decay=args.weight_decay,
         warmup_ratio=args.warmup_ratio,
-        max_new_tokens=args.sample_max_new_tokens,
+        # max_new_tokens=args.sample_max_new_tokens,
     )
+    smallm_model.set_log_tool(LOG)
 
     callbacks = [
         LearningRateMonitor(logging_interval="step"),
@@ -315,6 +175,23 @@ def run_for_model(model_cfg: Dict[str, Any], args: argparse.Namespace, global_ou
             save_top_k=-1,  # Keep all checkpoints
             save_on_train_epoch_end=True,
         ),
+        # generates previews during training 
+        shared_utils.PreviewAudioCallback(
+            # when to trigger the preview renders
+            every_n_epochs=10,  
+            every_n_steps=5000, 
+            pl_module=smallm_model,
+            # files to use as prompts
+            prompt_files=[datamodule.val_files[0]], 
+            max_prompt_len = 512,  
+            max_new_tokens= 500, # GPT-2 can take 1024 max I think
+            # fine controls for generation
+            do_sample = True,           # set True for stochastic decoding
+            temperature = 0.8,
+            top_p = 0.95,
+            top_k = 50,
+            repetition_penalty = 1.1   # >1.0 discourages repeats
+        )
     ]
 
     trainer = Trainer(
@@ -342,7 +219,7 @@ def run_for_model(model_cfg: Dict[str, Any], args: argparse.Namespace, global_ou
     if args.auto_scale_bs:
         LOG.info(f"Prior to auto-scaling, batch size is {datamodule.batch_size}")
         try:
-            new_bs = shared_utils.autoscale_batch_size_mps_safe(lit_module, datamodule, accelerator, devices, precision)
+            new_bs = shared_utils.autoscale_batch_size_mps_safe(smallm_model, datamodule, accelerator, devices, precision)
             if new_bs: 
                 datamodule.batch_size = new_bs
                 LOG.info(f"Auto-scaled batch size (MPS-safe): {new_bs}")
@@ -359,41 +236,14 @@ def run_for_model(model_cfg: Dict[str, Any], args: argparse.Namespace, global_ou
             
     LOG.info(f"Chose batch size {datamodule.batch_size}")
 
-    # Full validation BEFORE training (beyond sanity val)
-    # LOG.info("Running initial full validation...")
-    # # try:
-    # trainer.validate(lit_module, datamodule=datamodule, verbose=False)
-    # # except Exception as e:
-    #     # LOG.warning(f"Initial validation encountered an issue (continuing): {e}")
-
-    # LOG.info("Validation complete...")
-
     # Train with OOM fallback (halve batch size until it fits)
     bs = datamodule.batch_size
-    while bs > 0:
-        try:
-            LOG.info(f"Starting training with batch_size={bs}")
-            trainer.fit(lit_module, datamodule=datamodule, ckpt_path=None) # no ckpt by default to avoid it finding the ones created in batch size estimation
-            break
-        except RuntimeError as e:
-            msg = str(e).lower()
-            if "out of memory" in msg or "cuda error" in msg:
-                LOG.warning(f"OOM at batch_size={bs}. Reducing by half and retrying...")
-                bs //= 2
-                if bs < 1:
-                    LOG.error("Cannot reduce batch size further. Aborting for this model.")
-                    break
-                datamodule.batch_size = bs
-                if torch.cuda.is_available():
-                    torch.cuda.empty_cache()
-            else:
-                LOG.error(f"Runtime error during training: {e}")
-                LOG.debug(traceback.format_exc())
-                break
-        except Exception as e:
-            LOG.error(f"Unexpected error during training: {e}")
-            LOG.debug(traceback.format_exc())
-            break
+    if bs > 0:
+        LOG.info(f"Starting training with batch_size={bs}")
+        trainer.fit(smallm_model, datamodule=datamodule, ckpt_path=None) # no ckpt by default to avoid it finding the ones created in batch size estimation
+    else:
+        LOG.info(f"Batch size came out at zero for {hf_repo} to not gonna run it")
+
 
     LOG.info("Training complete.")
     try:
@@ -401,21 +251,6 @@ def run_for_model(model_cfg: Dict[str, Any], args: argparse.Namespace, global_ou
         LOG.info(f"Best checkpoint: {ckpt if ckpt else 'none'}")
     except Exception:
         pass
-
-
-# --------------------
-# Config parsing & validation
-# --------------------
-# def load_and_validate_config(config_path: Path) -> Dict[str, Any]:
-#     assert config_path.exists(), f"Config not found: {config_path}"
-#     with config_path.open("r", encoding="utf-8") as f:
-#         cfg = json.load(f)
-#     assert "models" in cfg and isinstance(cfg["models"], list), 'Config must contain key "models" (list).'
-#     for m in cfg["models"]:
-#         assert "hf_repo" in m and "size_b" in m, 'Each model requires "hf_repo" and "size_b"'
-#         if "trust_remote_code" not in m:
-#             m["trust_remote_code"] = False
-#     return cfg
 
 
 # --------------------
@@ -443,7 +278,7 @@ def parse_args():
     p.add_argument("--grad_clip", type=float, default=0.0)
     p.add_argument("--seed", type=int, default=42)
     p.add_argument("--early_stopping_patience", type=int, default=2)
-    p.add_argument("--sample_max_new_tokens", type=int, default=64, help="Tokens to generate for sample predictions")
+    # p.add_argument("--sample_max_new_tokens", type=int, default=512, help="Tokens to generate for sample predictions")
    
     p.add_argument("--auto_scale_bs", action="store_true", help="Auto-tune batch size with Lightning Tuner")
     p.add_argument("--bs_mode", type=str, default="binsearch", choices=["power", "binsearch"])
@@ -498,12 +333,7 @@ def main():
     for m in cfg["models"]:
             
         LOG.info(f"=== Model: {m['hf_repo']} (size {m['size_b']}) ===")
-        # try:
         run_for_model(m, args, out_root)
-        # except Exception as e:
-        #     LOG.error(f"Fatal error for model {m['hf_repo']}: {e}")
-        #     LOG.debug(traceback.format_exc())
-        #     LOG.info("Continuing to next model...")
 
     LOG.info("All done.")
 
