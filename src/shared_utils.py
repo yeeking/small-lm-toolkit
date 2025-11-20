@@ -53,6 +53,10 @@ from MIDI import score2midi as score_to_midi
 
 TEXT_EXTS = {".txt", ".md", ".text"}
 
+
+
+
+
 def up_to_last(s: str, sub: str) -> str:
     """returns sub string of s up to last occrence of sub """
     idx = s.rfind(sub)
@@ -1247,17 +1251,29 @@ class SimpleDataModule(L.LightningDataModule):
 # --------------------
 # LightningModule
 # --------------------
+
 class CausalLMModule(L.LightningModule):
     def __init__(
         self,
         model: AutoModelForCausalLM,
         tokenizer: AutoTokenizer,
+        hf_repo_name: str | None = None,   
         lr: float = 2e-5,
         weight_decay: float = 0.01,
         warmup_ratio: float = 0.05,
         max_new_tokens: int = 64,
     ):
         super().__init__()
+
+        # If not explicitly given, try to infer from the model
+        if hf_repo_name is None:
+            # HF typically sets these:
+            hf_repo_name = getattr(model, "name_or_path", None)
+            if hf_repo_name is None and hasattr(model, "config"):
+                hf_repo_name = getattr(model.config, "_name_or_path", None)
+
+        self.hf_repo_name = hf_repo_name
+
         self.save_hyperparameters(ignore=["model", "tokenizer"])
         self.model = model
         self.tokenizer = tokenizer
@@ -1280,6 +1296,7 @@ class CausalLMModule(L.LightningModule):
     def validation_step(self, batch, batch_idx):
         out = self.model(**batch)
         val_loss = out.loss
+        print(f"Validation step called, val_loss={val_loss.item()}")
         self.log("val_loss", val_loss, on_step=True, on_epoch=True, prog_bar=True)
         return val_loss
 
@@ -1291,7 +1308,7 @@ class CausalLMModule(L.LightningModule):
 
     def on_validation_epoch_end(self):
         # Perplexity from aggregated val_loss
-        # LOG.info(f"Validation epoch ended - running additional evaluations")
+        LOG.info(f"Validation epoch ended - running additional evaluations")
 
         val_loss = self.trainer.callback_metrics.get("val_loss")
         if val_loss is not None:
@@ -1305,36 +1322,36 @@ class CausalLMModule(L.LightningModule):
 
         # Sample generations for a few validation prompts
         dm = self.trainer.datamodule
-        if not isinstance(dm, SimpleDataModule) or not dm.val_preview_texts:
+        if not isinstance(dm, shared_utils.SimpleDataModule) or not dm.val_preview_texts:
             return
-        # try:
-        self.model.eval()
-        samples = []
-        for i, prompt_text in enumerate(dm.val_preview_texts):
-            enc = self.tokenizer(
-                prompt_text,
-                return_tensors="pt",
-                truncation=True,
-                max_length=dm.want_ctx_size,
-            )
-            enc = {k: v.to(self.device) for k, v in enc.items()}
-
-            with torch.no_grad():
-                gen_ids = self.model.generate(
-                    **enc,
-                    max_new_tokens=self.max_new_tokens,
-                    do_sample=False,
-                    pad_token_id=self.tokenizer.pad_token_id,
-                    eos_token_id=self.tokenizer.eos_token_id,
+        try:
+            self.model.eval()
+            samples = []
+            for i, prompt_text in enumerate(dm.val_preview_texts):
+                enc = self.tokenizer(
+                    prompt_text,
+                    return_tensors="pt",
+                    truncation=True,
+                    max_length=dm.want_ctx_size,
                 )
-            gen_text = self.tokenizer.decode(gen_ids[0], skip_special_tokens=True)
-            samples.append(f"### Prompt {i+1}\n{prompt_text}\n\n### Output {i+1}\n{gen_text}\n")
+                enc = {k: v.to(self.device) for k, v in enc.items()}
 
-        if isinstance(self.logger, TensorBoardLogger):
-            self.logger.experiment.add_text("samples", "\n".join(samples), self.global_step)
-        # except Exception as e:
-            # LOG.warning(f"Sample generation failed: {e}")
-        # LOG.info(f"Validation epoch ended - additional evaluations complete")
+                with torch.no_grad():
+                    gen_ids = self.model.generate(
+                        **enc,
+                        max_new_tokens=self.max_new_tokens,
+                        do_sample=False,
+                        pad_token_id=self.tokenizer.pad_token_id,
+                        eos_token_id=self.tokenizer.eos_token_id,
+                    )
+                gen_text = self.tokenizer.decode(gen_ids[0], skip_special_tokens=True)
+                samples.append(f"### Prompt {i+1}\n{prompt_text}\n\n### Output {i+1}\n{gen_text}\n")
+
+            if isinstance(self.logger, TensorBoardLogger):
+                self.logger.experiment.add_text("samples", "\n".join(samples), self.global_step)
+        except Exception as e:
+            LOG.warning(f"Sample generation failed: {e}")
+        LOG.info(f"Validation epoch ended - additional evaluations complete")
 
 
     def configure_optimizers(self):
@@ -1350,4 +1367,143 @@ class CausalLMModule(L.LightningModule):
 
         sch = torch.optim.lr_scheduler.LambdaLR(opt, lr_lambda)
         return {"optimizer": opt, "lr_scheduler": {"scheduler": sch, "interval": "epoch", "name": "epoch_warmup_linear"}}
+
+    @classmethod    
+    def load_from_checkpoint_auto(cls, ckpt_path: str, force_hf_repo:str = None, local_files_only: bool = False):
+        """Attempt to load from a lightning checkpoint. Note it expects hf_repo_name in the ckpt hyper params
+        as it first 
+        """
+        # Peek into the checkpoint to find the repo/path
+        ckpt = torch.load(ckpt_path, map_location="cpu")
+        hparams = ckpt.get("hyper_parameters", {})
+        if force_hf_repo is not None: repo = force_hf_repo
+        else: repo = hparams.get("hf_repo_name", None)
+        assert repo is not None, f"no hf repo in the ckpt or passed as force_hf_repo so cannot load"
+        print(f"Loading from HF...")
+        
+        tokenizer = AutoTokenizer.from_pretrained(repo, local_files_only=local_files_only)
+        model = AutoModelForCausalLM.from_pretrained(repo, local_files_only=local_files_only)
+        
+        print(f"Tokenizer and model loaded successfully. Now importing state dict and lightning status from checkpoint at {ckpt_path} ")
+        # lit_module = CausalLMModule(
+        #     model=model,
+        #     tokenizer=tokenizer
+        # )
+        # lit_module.load_from_checkpoint(ckpt_path)
+        # return lit_module
+        try:
+            result = cls.load_from_checkpoint(
+                ckpt_path,
+                model=model,
+                tokenizer=tokenizer,
+            )
+            return result 
+        except:
+            print(f"Could not import from your checkpoint at {ckpt_path} - probably your checkpoint is not actually {repo} type")
+            return None
+
+
+# class CausalLMModule(L.LightningModule):
+#     def __init__(
+#         self,
+#         model: AutoModelForCausalLM,
+#         tokenizer: AutoTokenizer,
+#         lr: float = 2e-5,
+#         weight_decay: float = 0.01,
+#         warmup_ratio: float = 0.05,
+#         max_new_tokens: int = 64,
+#     ):
+#         super().__init__()
+#         self.save_hyperparameters(ignore=["model", "tokenizer"])
+#         self.model = model
+#         self.tokenizer = tokenizer
+#         self.lr = lr
+#         self.weight_decay = weight_decay
+#         self.warmup_ratio = warmup_ratio
+#         self.max_new_tokens = max_new_tokens
+
+#         self._param_count = sum(p.numel() for p in self.model.parameters())
+
+#     def forward(self, **batch):
+#         return self.model(**batch)
+
+#     def training_step(self, batch, batch_idx):
+#         out = self.model(**batch)
+#         loss = out.loss
+#         self.log("train_loss", loss, on_step=True, on_epoch=False, prog_bar=True)
+#         return loss
+
+#     def validation_step(self, batch, batch_idx):
+#         out = self.model(**batch)
+#         val_loss = out.loss
+#         self.log("val_loss", val_loss, on_step=True, on_epoch=True, prog_bar=True)
+#         return val_loss
+
+#     def on_train_start(self):
+#         if isinstance(self.logger, TensorBoardLogger):
+#             tb = self.logger.experiment
+#             tb.add_scalar("model/num_parameters", float(self._param_count), self.global_step)
+#             tb.add_text("model/tokenizer_info", f"vocab_size={self.tokenizer.vocab_size}", self.global_step)
+
+#     def on_validation_epoch_end(self):
+#         # Perplexity from aggregated val_loss
+#         # LOG.info(f"Validation epoch ended - running additional evaluations")
+
+#         val_loss = self.trainer.callback_metrics.get("val_loss")
+#         if val_loss is not None:
+#             try:
+#                 ppl = torch.exp(val_loss)
+#                 self.log("perplexity", ppl, prog_bar=True)
+#                 if isinstance(self.logger, TensorBoardLogger):
+#                     self.logger.experiment.add_scalar("val/perplexity", float(ppl), self.global_step)
+#             except Exception:
+#                 pass
+
+#         # Sample generations for a few validation prompts
+#         dm = self.trainer.datamodule
+#         if not isinstance(dm, SimpleDataModule) or not dm.val_preview_texts:
+#             return
+#         # try:
+#         self.model.eval()
+#         samples = []
+#         for i, prompt_text in enumerate(dm.val_preview_texts):
+#             enc = self.tokenizer(
+#                 prompt_text,
+#                 return_tensors="pt",
+#                 truncation=True,
+#                 max_length=dm.want_ctx_size,
+#             )
+#             enc = {k: v.to(self.device) for k, v in enc.items()}
+
+#             with torch.no_grad():
+#                 gen_ids = self.model.generate(
+#                     **enc,
+#                     max_new_tokens=self.max_new_tokens,
+#                     do_sample=False,
+#                     pad_token_id=self.tokenizer.pad_token_id,
+#                     eos_token_id=self.tokenizer.eos_token_id,
+#                 )
+#             gen_text = self.tokenizer.decode(gen_ids[0], skip_special_tokens=True)
+#             samples.append(f"### Prompt {i+1}\n{prompt_text}\n\n### Output {i+1}\n{gen_text}\n")
+
+#         if isinstance(self.logger, TensorBoardLogger):
+#             self.logger.experiment.add_text("samples", "\n".join(samples), self.global_step)
+#         # except Exception as e:
+#             # LOG.warning(f"Sample generation failed: {e}")
+#         # LOG.info(f"Validation epoch ended - additional evaluations complete")
+
+
+#     def configure_optimizers(self):
+#         """This configuration drives learning rate scheduling using epoch"""
+#         opt = AdamW(self.parameters(), lr=self.lr, weight_decay=self.weight_decay)
+
+#         warmup_epochs = max(1, int(self.trainer.max_epochs * self.warmup_ratio))
+#         def lr_lambda(epoch):
+#             if epoch < warmup_epochs:
+#                 return float(epoch + 1) / float(warmup_epochs)   # linear warmup
+#             progress = (epoch - warmup_epochs) / max(1, self.trainer.max_epochs - warmup_epochs)
+#             return max(0.0, 1.0 - progress)                      # linear decay
+
+#         sch = torch.optim.lr_scheduler.LambdaLR(opt, lr_lambda)
+#         return {"optimizer": opt, "lr_scheduler": {"scheduler": sch, "interval": "epoch", "name": "epoch_warmup_linear"}}
 
