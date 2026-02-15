@@ -193,7 +193,7 @@ def convert_model(hf_repo, model_size_str):
 
 def main():
     # Path to your JSON file
-    JSON_PATH = "./data/models_plan.json"
+    JSON_PATH = "../data/models_plan.json"
     assert os.path.exists(JSON_PATH), f"Cannot find JSON data file {JSON_PATH}"
 
     # Load the JSON

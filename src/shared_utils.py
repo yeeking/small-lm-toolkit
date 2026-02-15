@@ -53,6 +53,10 @@ from MIDI import score2midi as score_to_midi
 
 TEXT_EXTS = {".txt", ".md", ".text"}
 
+
+
+
+
 def up_to_last(s: str, sub: str) -> str:
     """returns sub string of s up to last occrence of sub """
     idx = s.rfind(sub)
@@ -620,7 +624,7 @@ def safe_read_lines(path: Path) -> List[str]:
         with path.open("r", encoding="utf-8", errors="ignore") as f:
             return [ln.strip() for ln in f.read().splitlines() if ln.strip()]
     except Exception as e:
-        # LOG.warning(f"Failed to read {path}: {e}")
+        # self.log_tool.warning(f"Failed to read {path}: {e}")
         return []
 
 def powers_of_two(min_ctx: int, max_ctx: int):
@@ -646,12 +650,12 @@ def build_windows_from_lines(lines: List[str], context: int) -> List[str]:
 # --------------------
 def select_accel_precision_devices():
     if torch.cuda.is_available():
-        # LOG.info("CUDA available: using GPU with mixed precision.")
+        # self.log_tool.info("CUDA available: using GPU with mixed precision.")
         return "gpu", "16-mixed", 1
     if getattr(torch.backends, "mps", None) and torch.backends.mps.is_available():  # type: ignore[attr-defined]
-        # LOG.info("MPS available: using Apple MPS with 32-bit precision.")
+        # self.log_tool.info("MPS available: using Apple MPS with 32-bit precision.")
         return "mps", "32-true", 1
-    # LOG.info("Falling back to CPU (32-bit precision).")
+    # self.log_tool.info("Falling back to CPU (32-bit precision).")
     return "cpu", "32-true", 1
 import tempfile
 
@@ -688,9 +692,9 @@ def autoscale_batch_size_mps_safe(lit_module, datamodule, accelerator, devices, 
 
 
 def load_model_no_cache(hf_repo, size_b, trust_remote_code):
-    # LOG.info(f"Loading tokenizer: {hf_repo}")
+    # self.log_tool.info(f"Loading tokenizer: {hf_repo}")
 
-    # LOG.info(f"Loading model: {hf_repo} (size {size_b})")
+    # self.log_tool.info(f"Loading model: {hf_repo} (size {size_b})")
     # first try loading from cache
     model_dir = os.path.join('models', 'saved', get_model_folder(hf_repo, size_b))
 
@@ -701,7 +705,7 @@ def load_model_no_cache(hf_repo, size_b, trust_remote_code):
 
         return tokenizer, model 
     except Exception as e:
-        # LOG.error(f"Failed to load model fr{hf_repo}: {e}")
+        # self.log_tool.error(f"Failed to load model fr{hf_repo}: {e}")
         print(f"load_model_no_cache: can't load from an offline save. going via HF tried {model_dir}")
     try:
         tokenizer = AutoTokenizer.from_pretrained(hf_repo, use_fast=True, trust_remote_code=trust_remote_code)
@@ -710,7 +714,7 @@ def load_model_no_cache(hf_repo, size_b, trust_remote_code):
         return tokenizer, model
 
     except Exception as e:
-        # LOG.error(f"Failed to load model fr{hf_repo}: {e}")
+        # self.log_tool.error(f"Failed to load model fr{hf_repo}: {e}")
         return None, None
     
     return tokenizer, model
@@ -735,7 +739,7 @@ def reinit_model_weights(model):
     return model
 
 def load_model_lora(hf_repo: str, trust_remote_code: bool, args) -> tuple[AutoTokenizer, AutoModelForCausalLM]:
-    # LOG.info(f"Loading tokenizer: {hf_repo}")
+    # self.log_tool.info(f"Loading tokenizer: {hf_repo}")
     tokenizer = AutoTokenizer.from_pretrained(hf_repo, use_fast=True, trust_remote_code=trust_remote_code)
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token or tokenizer.cls_token
@@ -763,7 +767,7 @@ def load_model_lora(hf_repo: str, trust_remote_code: bool, args) -> tuple[AutoTo
         # Avoid device_map="auto" to keep Lightning in charge unless you know you need it
         # model_kwargs["device_map"] = "auto"
 
-    # LOG.info(f"Loading model: {hf_repo}")
+    # self.log_tool.info(f"Loading model: {hf_repo}")
     model = AutoModelForCausalLM.from_pretrained(hf_repo, trust_remote_code=trust_remote_code, **model_kwargs)
 
     # Disable cache for training + enable gradient checkpointing if available
@@ -772,10 +776,10 @@ def load_model_lora(hf_repo: str, trust_remote_code: bool, args) -> tuple[AutoTo
             model.config.use_cache = False
         if hasattr(model, "gradient_checkpointing_enable"):
             model.gradient_checkpointing_enable()
-            # LOG.info("Enabled gradient checkpointing.")
+            # self.log_tool.info("Enabled gradient checkpointing.")
     except Exception as e:
         pass 
-        # LOG.warning(f"Gradient checkpointing toggle failed: {e}")
+        # self.log_tool.warning(f"Gradient checkpointing toggle failed: {e}")
 
     return tokenizer, model
 
@@ -797,7 +801,7 @@ def wrap_with_lora(model, args):
     # Log trainable parameter count:
     trainable = sum(p.numel() for p in peft_model.parameters() if p.requires_grad)
     total = sum(p.numel() for p in peft_model.parameters())
-    # LOG.info(f"LoRA trainable params: {trainable:,} / {total:,} "
+    # self.log_tool.info(f"LoRA trainable params: {trainable:,} / {total:,} "
     #          f"({100.0*trainable/total:.2f}% of total)")
     return peft_model
 
@@ -926,17 +930,24 @@ class WindowTextDataset(Dataset):
 
 
 
-def make_lm_collate(tokenizer, want_ctx_size: int, pad_to_max: bool = False):
+class _LMTextCollator:
     """
-    Batch-tokenise a list of strings. Builds labels = input_ids with pads masked to -100.
-    pad_to_max=False => pad to longest in batch (faster, less padding).
+    Picklable collate callable for torch DataLoader worker processes (spawn on macOS).
+    Using a top-level class avoids the "Can't get local object ...collate" error that
+    happens when a nested function is pickled under the spawn start method.
     """
-    def collate(batch_texts):
-        enc = tokenizer(
+
+    def __init__(self, tokenizer, want_ctx_size: int, pad_to_max: bool):
+        self.tokenizer = tokenizer
+        self.want_ctx_size = want_ctx_size
+        self.pad_to_max = pad_to_max
+
+    def __call__(self, batch_texts):
+        enc = self.tokenizer(
             batch_texts,
-            padding=("max_length" if pad_to_max else "longest"),
+            padding=("max_length" if self.pad_to_max else "longest"),
             truncation=True,
-            max_length=want_ctx_size,
+            max_length=self.want_ctx_size,
             return_tensors="pt",
         )
         input_ids = enc["input_ids"]
@@ -944,7 +955,14 @@ def make_lm_collate(tokenizer, want_ctx_size: int, pad_to_max: bool = False):
         labels = input_ids.clone()
         labels[attn == 0] = -100
         return {"input_ids": input_ids, "attention_mask": attn, "labels": labels}
-    return collate
+
+
+def make_lm_collate(tokenizer, want_ctx_size: int, pad_to_max: bool = False):
+    """
+    Batch-tokenise a list of strings. Builds labels = input_ids with pads masked to -100.
+    pad_to_max=False => pad to longest in batch (faster, less padding).
+    """
+    return _LMTextCollator(tokenizer, want_ctx_size, pad_to_max)
 
 
 class TrainIterableDatasetVarCtx(IterableDataset):
@@ -1247,17 +1265,29 @@ class SimpleDataModule(L.LightningDataModule):
 # --------------------
 # LightningModule
 # --------------------
+
 class CausalLMModule(L.LightningModule):
     def __init__(
         self,
         model: AutoModelForCausalLM,
         tokenizer: AutoTokenizer,
+        hf_repo_name: str | None = None,   
         lr: float = 2e-5,
         weight_decay: float = 0.01,
         warmup_ratio: float = 0.05,
         max_new_tokens: int = 64,
     ):
         super().__init__()
+
+        # If not explicitly given, try to infer from the model
+        if hf_repo_name is None:
+            # HF typically sets these:
+            hf_repo_name = getattr(model, "name_or_path", None)
+            if hf_repo_name is None and hasattr(model, "config"):
+                hf_repo_name = getattr(model.config, "_name_or_path", None)
+
+        self.hf_repo_name = hf_repo_name
+
         self.save_hyperparameters(ignore=["model", "tokenizer"])
         self.model = model
         self.tokenizer = tokenizer
@@ -1267,6 +1297,10 @@ class CausalLMModule(L.LightningModule):
         self.max_new_tokens = max_new_tokens
 
         self._param_count = sum(p.numel() for p in self.model.parameters())
+
+
+    def set_log_tool(self, log_tool):
+        self.log_tool = log_tool
 
     def forward(self, **batch):
         return self.model(**batch)
@@ -1280,6 +1314,7 @@ class CausalLMModule(L.LightningModule):
     def validation_step(self, batch, batch_idx):
         out = self.model(**batch)
         val_loss = out.loss
+        print(f"Validation step called, val_loss={val_loss.item()}")
         self.log("val_loss", val_loss, on_step=True, on_epoch=True, prog_bar=True)
         return val_loss
 
@@ -1291,7 +1326,7 @@ class CausalLMModule(L.LightningModule):
 
     def on_validation_epoch_end(self):
         # Perplexity from aggregated val_loss
-        # LOG.info(f"Validation epoch ended - running additional evaluations")
+        self.log_tool.info(f"Validation epoch ended - running additional evaluations")
 
         val_loss = self.trainer.callback_metrics.get("val_loss")
         if val_loss is not None:
@@ -1307,34 +1342,35 @@ class CausalLMModule(L.LightningModule):
         dm = self.trainer.datamodule
         if not isinstance(dm, SimpleDataModule) or not dm.val_preview_texts:
             return
-        # try:
-        self.model.eval()
-        samples = []
-        for i, prompt_text in enumerate(dm.val_preview_texts):
-            enc = self.tokenizer(
-                prompt_text,
-                return_tensors="pt",
-                truncation=True,
-                max_length=dm.want_ctx_size,
-            )
-            enc = {k: v.to(self.device) for k, v in enc.items()}
-
-            with torch.no_grad():
-                gen_ids = self.model.generate(
-                    **enc,
-                    max_new_tokens=self.max_new_tokens,
-                    do_sample=False,
-                    pad_token_id=self.tokenizer.pad_token_id,
-                    eos_token_id=self.tokenizer.eos_token_id,
+        try:
+            self.model.eval()
+            samples = []
+            for i, prompt_text in enumerate(dm.val_preview_texts):
+                enc = self.tokenizer(
+                    prompt_text,
+                    return_tensors="pt",
+                    truncation=True,
+                    max_length=dm.want_ctx_size,
                 )
-            gen_text = self.tokenizer.decode(gen_ids[0], skip_special_tokens=True)
-            samples.append(f"### Prompt {i+1}\n{prompt_text}\n\n### Output {i+1}\n{gen_text}\n")
+                enc = {k: v.to(self.device) for k, v in enc.items()}
 
-        if isinstance(self.logger, TensorBoardLogger):
-            self.logger.experiment.add_text("samples", "\n".join(samples), self.global_step)
-        # except Exception as e:
-            # LOG.warning(f"Sample generation failed: {e}")
-        # LOG.info(f"Validation epoch ended - additional evaluations complete")
+                with torch.no_grad():
+                    gen_ids = self.model.generate(
+                        **enc,
+                        max_new_tokens=self.max_new_tokens,
+                        do_sample=False,
+                        pad_token_id=self.tokenizer.pad_token_id,
+                        eos_token_id=self.tokenizer.eos_token_id,
+                    )
+                gen_text = self.tokenizer.decode(gen_ids[0], skip_special_tokens=True)
+                samples.append(f"### Prompt {i+1}\n{prompt_text}\n\n### Output {i+1}\n{gen_text}\n")
+
+            if isinstance(self.logger, TensorBoardLogger):
+                self.logger.experiment.add_text("samples", "\n".join(samples), self.global_step)
+        except Exception as e:
+
+            self.log_tool.warning(f"Sample generation failed: {e}")
+        self.log_tool.info(f"Validation epoch ended - additional evaluations complete")
 
 
     def configure_optimizers(self):
@@ -1351,3 +1387,32 @@ class CausalLMModule(L.LightningModule):
         sch = torch.optim.lr_scheduler.LambdaLR(opt, lr_lambda)
         return {"optimizer": opt, "lr_scheduler": {"scheduler": sch, "interval": "epoch", "name": "epoch_warmup_linear"}}
 
+    @classmethod    
+    def load_from_checkpoint_auto(cls, ckpt_path: str, force_hf_repo:str = None, local_files_only: bool = False):
+        """Attempt to load from a lightning checkpoint. Note it expects hf_repo_name in the ckpt hyper params
+        as it first 
+        """
+        # Peek into the checkpoint to find the repo/path
+        ckpt = torch.load(ckpt_path, map_location="cpu")
+        hparams = ckpt.get("hyper_parameters", {})
+        if force_hf_repo is not None: repo = force_hf_repo
+        else: repo = hparams.get("hf_repo_name", None)
+        assert repo is not None, f"no hf repo in the ckpt or passed as force_hf_repo so cannot load"
+        print(f"Loading from HF...")
+        
+        tokenizer = AutoTokenizer.from_pretrained(repo, local_files_only=local_files_only)
+        model = AutoModelForCausalLM.from_pretrained(repo, local_files_only=local_files_only)
+        
+        print(f"Tokenizer and model loaded successfully. Now importing state dict and lightning status from checkpoint at {ckpt_path} ")
+
+        try:
+            result = cls.load_from_checkpoint(
+                ckpt_path,
+                model=model,
+                tokenizer=tokenizer,
+            )
+            print(f"Checkpoint at {ckpt_path} loaded and applied to model {repo}")
+        except:
+            result = None
+        assert result is not None, f"Could not import from your checkpoint at {ckpt_path} - probably your checkpoint is not actually {repo} type"
+        return result 
